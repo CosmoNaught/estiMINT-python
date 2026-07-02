@@ -4,6 +4,7 @@ These exercise the bundled models in src/estimint/data, so they run offline.
 """
 
 import pandas as pd
+import pytest
 
 from estimint import (
     load_xgb_model,
@@ -33,33 +34,40 @@ class TestPrevalenceToEir:
 
 
 class TestMosquitoDelta:
-    def _run(self, delta):
-        return estimate_eir_with_mosquito_delta(
-            prevalence=0.30, mosquito_delta=delta, **INTERVENTIONS
-        )
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {name: load_xgb_model(name) for name in ("prevalence", "hbr", "eir_to_hbr")}
 
-    def test_returns_expected_keys(self):
-        res = self._run(0.25)
-        assert set(res) == {
+    def _run(self, models, delta):
+        inputs = pd.DataFrame([{"prevalence": 0.30, "mosquito_delta": delta, **INTERVENTIONS}])
+        return estimate_eir_with_mosquito_delta(inputs, models=models).iloc[0]
+
+    def test_returns_expected_columns(self, models):
+        res = self._run(models, 0.25)
+        assert set(res.index) == {
             "eir_baseline", "eir_new", "eir_multiplier", "hbr_baseline", "hbr_new",
         }
 
-    def test_zero_delta_is_identity(self):
-        res = self._run(0.0)
+    def test_zero_delta_is_identity(self, models):
+        res = self._run(models, 0.0)
         assert res["eir_new"] == res["eir_baseline"]
         assert res["eir_multiplier"] == 1.0
 
-    def test_more_mosquitoes_raises_eir(self):
-        res = self._run(0.25)
+    def test_more_mosquitoes_raises_eir(self, models):
+        res = self._run(models, 0.25)
         assert res["eir_new"] > res["eir_baseline"]
         assert res["eir_multiplier"] > 1.0
         assert res["hbr_new"] > res["hbr_baseline"]
 
-    def test_fewer_mosquitoes_lowers_eir(self):
-        res = self._run(-0.50)
+    def test_fewer_mosquitoes_lowers_eir(self, models):
+        res = self._run(models, -0.50)
         assert res["eir_new"] < res["eir_baseline"]
         assert res["hbr_new"] < res["hbr_baseline"]
 
-    def test_monotonic_in_delta(self):
-        eirs = [self._run(d)["eir_new"] for d in (-0.5, -0.25, 0.0, 0.25, 0.5, 1.0)]
-        assert eirs == sorted(eirs)
+    def test_batch_is_monotonic_in_delta(self, models):
+        # a single batched call handles every row and preserves input order
+        deltas = [-0.5, -0.25, 0.0, 0.25, 0.5, 1.0]
+        inputs = pd.DataFrame([{"prevalence": 0.30, "mosquito_delta": d, **INTERVENTIONS} for d in deltas])
+        res = estimate_eir_with_mosquito_delta(inputs, models=models)
+        assert list(res.index) == list(range(len(deltas)))
+        assert list(res["eir_new"]) == sorted(res["eir_new"])

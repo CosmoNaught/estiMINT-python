@@ -56,7 +56,7 @@ from .hbr import estimate_eir_with_mosquito_delta
 
 from .bednet import calculate_dn0, net_types, DN0Result
 
-from .scenarios import run_scenarios
+from .scenarios import run_scenarios, preload_models
 from .types import Scenario, EirTarget
 
 __all__ = [
@@ -100,6 +100,8 @@ __all__ = [
     "DN0Result",
     # scenarios
     "run_scenarios",
+    "preload_models",
+    # types
     "Scenario",
     "EirTarget",
 ]

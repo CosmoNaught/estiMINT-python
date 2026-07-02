@@ -11,143 +11,110 @@ Pipeline:
 5. EIR_new = EIR_baseline * (EIR_scaled / EIR_roundtrip)
 """
 
-from typing import Dict, Any, Optional
+from typing import Any
 
 import pandas as pd
 
 from .run import run_xgb_model
-from .storage import load_xgb_model
 
 
-# Lazy-loaded model cache
-_models: Dict[str, Any] = {}
-
-
-def _get_model(name: str) -> Dict[str, Any]:
-    """Load and cache a bundled model by name."""
-    if name not in _models:
-        _models[name] = load_xgb_model(name)
-    return _models[name]
-
-
-def estimate_eir_with_mosquito_delta(
-    prevalence: float,
-    mosquito_delta: float,
-    dn0_use: float,
-    Q0: float,
-    phi_bednets: float,
-    seasonal: float,
-    itn_use: float,
-    irs_use: float,
-    prev_model: Optional[Dict[str, Any]] = None,
-    hbr_model: Optional[Dict[str, Any]] = None,
-    eir_to_hbr_model: Optional[Dict[str, Any]] = None,
-) -> Dict[str, float]:
+def estimate_eir_with_mosquito_delta(inputs: pd.DataFrame, *, models: dict[str, Any]) -> pd.DataFrame:
     """
-    Estimate the new EIR after a change in mosquito density.
+    Estimate new EIR after a change in mosquito density for multiple scenarios.
 
-    Uses a ratio approach: the HBR model predicts EIR at both the baseline
-    and scaled HBR, then applies the relative multiplier to the clean
+    The HBR model predicts EIR at both the
+    baseline and scaled HBR, then applies the relative multiplier to the clean
     baseline EIR from the prevalence model.
 
     Parameters
     ----------
-    prevalence : float
-        Baseline malaria prevalence (prev_y9), e.g. 0.30 for 30%.
-    mosquito_delta : float
-        Fractional change in mosquito density, e.g. 0.10 for +10%, -0.50 for -50%.
-        Must be > -1 (cannot eliminate more mosquitoes than exist).
-    dn0_use : float
-        Bednet contact reduction parameter.
-    Q0 : float
-        Human blood index.
-    phi_bednets : float
-        Proportion of bites on humans while in bed.
-    seasonal : float
-        Seasonality flag (0.0 or 1.0).
-    itn_use : float
-        ITN coverage (0-1).
-    irs_use : float
-        IRS coverage (0-1).
-    prev_model : dict, optional
-        Custom prevalence model. If None, uses bundled model.
-    hbr_model : dict, optional
-        Custom HBR->EIR model. If None, uses bundled model.
-    eir_to_hbr_model : dict, optional
-        Custom EIR->HBR model. If None, uses bundled model.
+    inputs : pd.DataFrame
+        One row per scenario. Required columns:
+
+        - ``prevalence`` : baseline malaria prevalence (prev_y9), e.g. 0.30 for 30%.
+        - ``mosquito_delta`` : fractional change in mosquito density, e.g. 0.10
+          for +10%, -0.50 for -50%. Must be > -1 per row.
+        - ``dn0_use`` : bednet contact reduction parameter.
+        - ``Q0`` : human blood index.
+        - ``phi_bednets`` : proportion of bites on humans while in bed.
+        - ``seasonal`` : seasonality flag (0.0 or 1.0).
+        - ``itn_use`` : ITN coverage (0-1).
+        - ``irs_use`` : IRS coverage (0-1).
+
+    models : dict
+        Pre-loaded model dictionary with keys ``"prevalence"``, ``"hbr"``,
+        and ``"eir_to_hbr"``.
 
     Returns
     -------
-    dict
-        Dictionary with keys:
-        - eir_baseline: Baseline EIR from prevalence
-        - eir_new: New EIR after mosquito density change
-        - eir_multiplier: Ratio of new EIR to baseline
-        - hbr_baseline: Estimated baseline HBR
-        - hbr_new: HBR after mosquito density change
+    pd.DataFrame
+        Same index as *inputs*, with columns:
+
+        - ``eir_baseline`` : baseline EIR from prevalence.
+        - ``eir_new`` : new EIR after mosquito density change.
+        - ``eir_multiplier`` : ratio of new EIR to baseline.
+        - ``hbr_baseline`` : estimated baseline HBR.
+        - ``hbr_new`` : HBR after mosquito density change.
 
     Examples
     --------
+    >>> import pandas as pd
     >>> from estimint import estimate_eir_with_mosquito_delta
-    >>> result = estimate_eir_with_mosquito_delta(
-    ...     prevalence=0.30, mosquito_delta=0.25,
-    ...     dn0_use=0.33, Q0=0.87, phi_bednets=0.82,
-    ...     seasonal=0.0, itn_use=0.6, irs_use=0.0,
-    ... )
-    >>> print(f"EIR: {result['eir_baseline']:.1f} -> {result['eir_new']:.1f}")
+    >>> inputs = pd.DataFrame([
+    ...     {"prevalence": 0.30, "mosquito_delta": 0.25,
+    ...      "dn0_use": 0.33, "Q0": 0.87, "phi_bednets": 0.82,
+    ...      "seasonal": 0.0, "itn_use": 0.6, "irs_use": 0.0},
+    ... ])
+    >>> result = estimate_eir_with_mosquito_delta(inputs, models=models)
+    >>> print(result[["eir_baseline", "eir_new"]])
     """
-    if prev_model is None:
-        prev_model = _get_model("prevalence")
-    if hbr_model is None:
-        hbr_model = _get_model("hbr")
-    if eir_to_hbr_model is None:
-        eir_to_hbr_model = _get_model("eir_to_hbr")
-
-    intv = {
-        "dn0_use": [dn0_use],
-        "Q0": [Q0],
-        "phi_bednets": [phi_bednets],
-        "seasonal": [seasonal],
-        "itn_use": [itn_use],
-        "irs_use": [irs_use],
-    }
+    features = [
+        "dn0_use",
+        "Q0",
+        "phi_bednets",
+        "seasonal",
+        "itn_use",
+        "irs_use",
+    ]
+    intervention_data = inputs[features]
 
     # Step 1: prevalence -> EIR baseline
-    X_prev = pd.DataFrame({"prev_y9": [prevalence], **intv})
-    eir_baseline = float(run_xgb_model(X_prev, prev_model)[0])
-
-    if mosquito_delta == 0:
-        return {
-            "eir_baseline": eir_baseline,
-            "eir_new": eir_baseline,
-            "eir_multiplier": 1.0,
-            "hbr_baseline": 0.0,
-            "hbr_new": 0.0,
-        }
+    prevalence_data = intervention_data.assign(prev_y9=inputs["prevalence"].to_numpy())
+    eir_baseline = run_xgb_model(prevalence_data, models["prevalence"])
 
     # Step 2: EIR -> HBR baseline
-    X_eir = pd.DataFrame({"eir": [eir_baseline], **intv})
-    hbr_baseline = float(run_xgb_model(X_eir, eir_to_hbr_model)[0])
+    eir_data = intervention_data.assign(eir=eir_baseline)
+    hbr_baseline = run_xgb_model(eir_data, models["eir_to_hbr"])
 
     # Step 3: apply mosquito delta (positive or negative)
-    hbr_new = hbr_baseline * (1 + mosquito_delta)
+    hbr_new = hbr_baseline * (1 + inputs["mosquito_delta"].to_numpy())
 
     # Step 4: ratio approach — batch both HBR values in one call so they
     # share the same smooth PCHIP curve
-    intv2 = {k: v * 2 for k, v in intv.items()}   # repeat for 2 rows
-    X_hbr = pd.DataFrame({"hbr_y9": [hbr_baseline, hbr_new], **intv2})
-    eir_both = run_xgb_model(X_hbr, hbr_model)
-    eir_rt = float(eir_both[0])
-    eir_new_raw = float(eir_both[1])
+    hbr_data = pd.concat(
+        [
+            intervention_data.assign(hbr_y9=hbr_baseline),
+            intervention_data.assign(hbr_y9=hbr_new),
+        ],
+        ignore_index=True,
+    )
+    eir_from_hbr = run_xgb_model(hbr_data, models["hbr"])
+
+    count = len(inputs)
+    eir_rt = eir_from_hbr[:count]
+    eir_new_raw = eir_from_hbr[count:]
 
     # Step 5: multiplier applied to clean baseline
     multiplier = eir_new_raw / eir_rt
     eir_new = eir_baseline * multiplier
 
-    return {
-        "eir_baseline": eir_baseline,
-        "eir_new": eir_new,
-        "eir_multiplier": multiplier,
-        "hbr_baseline": hbr_baseline,
-        "hbr_new": hbr_new,
-    }
+    return pd.DataFrame(
+        {
+            "eir_baseline": eir_baseline,
+            "eir_new": eir_new,
+            "eir_multiplier": multiplier,
+            "hbr_baseline": hbr_baseline,
+            "hbr_new": hbr_new,
+        },
+        index=inputs.index,
+    )
