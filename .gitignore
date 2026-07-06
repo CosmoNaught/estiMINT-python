@@ -54,3 +54,5 @@ models/**/metrics/
 .coverage.*
 htmlcov/
 .pytest_cache/
+train_outputs/
+outputs/
