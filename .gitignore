@@ -46,10 +46,3 @@ models/**/*.parquet
 models/**/*.pkl
 models/**/*.model
 models/**/plots/
-models/**/metrics/
-
-# Test / coverage
-.coverage
-.coverage.*
-htmlcov/
-.pytest_cache/
