@@ -2,6 +2,19 @@ data_file: "datasets/estimint_simulations_y9.parquet"
 split_file: "datasets/split.csv"
 num_workers: 0
 use_existing_split: false
+num_workers: 0
+
+
+# model
+
+# Hyperparameters
+num_epochs: 200
+min_epochs: 100
+patience: 50
+lr: 3e-4
+batch_size: 128
+weight_decay: 1e-4
+
 
 # General
 cur_time: ${now:%Y-%m-%dT%H:%M:%S}

@@ -11,6 +11,7 @@ from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
 from .data.preprocess import PreparedData, prepare_data
+from .data.dataset import make_loader
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +26,21 @@ def main(cfg: DictConfig) -> None:
 
     prepared_data = prepare_data(raw_df, cfg)
 
-    print(f"train data len: {len(prepared_data.train_data)}")
-
+    val_loader = make_loader(
+        data=prepared_data.val_data,
+        batch_size=cfg.batch_size,
+        seed=cfg.seed,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        drop_remainder=True,
+    )
+    test_loader = make_loader(
+        data=prepared_data.test_data,
+        batch_size=cfg.batch_size,
+        seed=cfg.seed,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        drop_remainder=True,
+    )
 if __name__ == "__main__":
     main()

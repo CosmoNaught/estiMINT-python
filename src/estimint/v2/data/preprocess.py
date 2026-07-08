@@ -171,13 +171,13 @@ def _build_data(
         if ps not in groups.groups:
             continue
 
-        df["eir_log10"] = np.log10(df["eir"])
+        df["eir_log10"] = np.log10(df["eir"], dtype=np.float32) # TODO: do we need to log10?
         X = (
             df.loc[groups.groups[ps], FEATURES_BASE]
             .astype(np.float32)
             .values
         )
-        Y = df.loc[groups.groups[ps], "eir_log10"].values.astype(np.float32)
+        Y = df.loc[groups.groups[ps], "eir_log10"].values
         data.append(
             {
                 "x": X,
