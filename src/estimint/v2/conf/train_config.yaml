@@ -2,19 +2,29 @@ data_file: "datasets/estimint_simulations_y9.parquet"
 split_file: "datasets/split.csv"
 num_workers: 0
 use_existing_split: false
-num_workers: 0
-
+target: "eir"
+stratify: true
+calib_frac: 0.0
 
 # model
+width: 256
+depth: 4
+n_quad: 96
+mlp_residual: false
+dropout_rate: 0.0
 
 # Hyperparameters
-num_epochs: 200
+num_epochs: 300
 min_epochs: 100
 patience: 50
-lr: 3e-4
-batch_size: 128
+lr: 1e-3
+batch_size: 256
 weight_decay: 1e-4
+n_ensembles: 1
+n_bins: 24
 
+# Checkpoint
+checkpoint_dir: "${output_dir}/ckpts-${cur_time}"
 
 # General
 cur_time: ${now:%Y-%m-%dT%H:%M:%S}
@@ -22,5 +32,5 @@ seed: 42
 use_wandb: false
 output_dir: "train_outputs/"
 wandb:
-  project: "estimint/"
+  project: "estimint-training"
   name: "train-${cur_time}"

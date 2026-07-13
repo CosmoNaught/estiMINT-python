@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 import numpy as np
 from .features import StandardScaler, FEATURES_BASE
+from estimint.data_processing import make_value_weights
 import pickle
 from dataclasses import dataclass, field
 
@@ -19,9 +20,19 @@ class PreparedData:
     test_data: list
     input_size: int
     scaler: StandardScaler
+    target_scaler: StandardScaler
+    calib_data: list = field(default_factory=list)
     train_param_sims: set[tuple[int, int]] = field(default_factory=set)
     val_param_sims: set[tuple[int, int]] = field(default_factory=set)
     test_param_sims: set[tuple[int, int]] = field(default_factory=set)
+    calib_param_sims: set[tuple[int, int]] = field(default_factory=set)
+
+@dataclass
+class SplitParamSims:
+    train: set[tuple[int, int]] = field(default_factory=set)
+    val: set[tuple[int, int]] = field(default_factory=set)
+    calib: set[tuple[int, int]] = field(default_factory=set)
+    test: set[tuple[int, int]] = field(default_factory=set)
 
 def _filter_by_threshold(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -47,7 +58,7 @@ def _filter_by_threshold(df: pd.DataFrame) -> pd.DataFrame:
 
 def _load_split(
     split_file: str, df: pd.DataFrame
-) -> tuple[set[tuple[int, int]], set[tuple[int, int]], set[tuple[int, int]]]:
+) -> SplitParamSims:
     """
     Load an existing train/val/test split.
 
@@ -60,73 +71,179 @@ def _load_split(
     """
     split_df = pd.read_csv(split_file)
     present = set(df[["parameter_index", "simulation_index"]].itertuples(index=False, name=None))
-    train_ps = {
-        (r.parameter_index, r.simulation_index) for r in split_df[split_df["split"] == "train"].itertuples()
-    } & present
-    val_ps = {
-        (r.parameter_index, r.simulation_index) for r in split_df[split_df["split"] == "validate"].itertuples()
-    } & present
-    test_ps = {
-        (r.parameter_index, r.simulation_index) for r in split_df[split_df["split"] == "test"].itertuples()
-    } & present
-    return train_ps, val_ps, test_ps  # type: ignore
 
+    def _pairs(df: pd.DataFrame, split_name: str) -> set[tuple[int, int]]:
+        return {
+
+            (r.parameter_index, r.simulation_index) for r in df[df["split"] == split_name].itertuples()
+        } & present # type: ignore
+
+    return SplitParamSims(
+        train=_pairs(split_df, "train"),
+        val=_pairs(split_df, "validate"),
+        test=_pairs(split_df, "test"),
+        calib=_pairs(split_df, "calibrate")
+    )
+
+# TODO: check if need to strata or not.
+def _parameter_strata(
+    df: pd.DataFrame,
+    target: str,
+    n_bins: int,
+    stratify: bool,
+) -> list[np.ndarray]:
+    """
+    Build parameter-index groups used for stratified split assignment.
+
+    Args:
+        df: Input dataframe containing ``parameter_index`` and ``target`` columns.
+        target: Column whose per-parameter mean defines the strata.
+        n_bins: Maximum number of quantile bins to create when stratifying.
+        stratify: If False, return all parameters as a single group.
+
+    Returns:
+        A list of parameter-index arrays. Each array is assigned to train,
+        validation, calibration, and test splits independently.
+    """
+    param_target = df.groupby("parameter_index")[target].mean()
+    param_indices = param_target.index.to_numpy()
+    if not stratify:
+        return [param_indices]
+
+    target_values = np.log10(param_target.to_numpy(dtype=np.float64))
+    unique_targets = np.unique(target_values)
+
+    quantile_bins = pd.qcut(
+        target_values,
+        q=min(n_bins, len(unique_targets)),
+        labels=False,
+        duplicates="drop",
+    )
+
+    return [param_indices[quantile_bins == bucket] for bucket in np.unique(quantile_bins)]
+
+
+def _param_sims_from_assignment(df: pd.DataFrame, assign: dict[int, str]) -> SplitParamSims:
+    """Build parameter-simulation sets from a parameter-level split assignment."""
+    all_ps = set(df[["parameter_index", "simulation_index"]].itertuples(index=False, name=None))
+    split_params = {name: {p for p, split in assign.items() if split == name} for name in ["train", "val", "calib", "test"]}
+    return SplitParamSims(
+        train={ps for ps in all_ps if ps[0] in split_params["train"]},
+        val={ps for ps in all_ps if ps[0] in split_params["val"]},
+        calib={ps for ps in all_ps if ps[0] in split_params["calib"]},
+        test={ps for ps in all_ps if ps[0] in split_params["test"]},
+    )
+
+def _assign_param_group(
+    params: np.ndarray,
+    rng: np.random.Generator,
+    train_frac: float,
+    val_frac: float,
+    calib_frac: float,
+) -> dict[int, str]:
+    shuffled = np.array(params, copy=True)
+    rng.shuffle(shuffled)
+    n = len(shuffled)
+    train_end, val_end, calib_end = np.cumsum([np.array([train_frac, val_frac, calib_frac]) * n]).astype(int)
+
+    assigned: dict[int, str] = {}
+    for split_name, split_param in (
+        ("train", shuffled[:train_end]),
+        ("val", shuffled[train_end: val_end]),
+        ("calib", shuffled[val_end: calib_end]),
+        ("test", shuffled[calib_end:]),
+    ):
+        assigned.update({param: split_name for param in split_param})
+    return assigned
+
+def _assign_param_splits(
+    df: pd.DataFrame,
+    *,
+    seed: int,
+    calib_frac: float = 0.0,
+    stratify: bool = True,
+    target: str = "eir",
+    n_bins: int = 10,
+) -> dict[int, str]:
+    """Assign each parameter_index to a split, grouping whole parameters.
+    If stratify is True, the assignment is balanced across quantile bins of the mean target value per parameter.
+    """
+    rng = np.random.default_rng(seed)
+    train_frac = 0.7
+    val_frac = (1.0 - train_frac - calib_frac) / 2.0
+    if val_frac <= 0:
+        raise ValueError("Validation fraction must be positive; check calib_frac.")
+
+    assign: dict[int, str] = {}
+    for params in _parameter_strata(df, target, n_bins, stratify):
+        assign.update(_assign_param_group(params, rng, train_frac, val_frac, calib_frac))
+    return assign
 
 def _create_split(
-    df: pd.DataFrame, seed: int
-) -> tuple[set[tuple[int, int]], set[tuple[int, int]], set[tuple[int, int]]]:
+    df: pd.DataFrame,
+    seed: int,
+    *,
+    stratify: bool = True,
+    target: str = "eir",
+    n_bins: int = 10,
+    calib_frac: float = 0.0
+) -> SplitParamSims:
     """
-    Create a train/val/test split by parameter.
+    Create grouped parameter-simulation splits.
+
+    This is the pair-set version of :func:`group_split`. Both functions share
+    the same parameter-level assignment, so train/val/calib/test never contain
+    different simulations from the same ``parameter_index``.
 
     Args:
         df: Filtered dataframe.
         seed: Shuffle seed.
+        calib_frac: Fraction to split calibration
+        stratify: Balance the split across target-magnitude quantile bins.
+        target: Column used for stratification.
+        n_bins: Number of quantile strata when ``stratify`` is True.
 
     Returns:
-        Train, validation, and test parameter-simulation sets.
+        Grouped train, validation, optional calibration, and test
+        parameter-simulation sets.
     """
-    random.seed(seed)
-    params = list(df["parameter_index"].unique())
-    random.shuffle(params)
-    n = len(params)
-    n_train = int(0.70 * n)
-    n_val = int(0.15 * n)
-    train_p = set(params[:n_train])
-    val_p = set(params[n_train : n_train + n_val])
-    test_p = set(params[n_train + n_val :])
-    all_ps = set(df[["parameter_index", "simulation_index"]].itertuples(index=False, name=None))
-    return (
-        {ps for ps in all_ps if ps[0] in train_p},
-        {ps for ps in all_ps if ps[0] in val_p},
-        {ps for ps in all_ps if ps[0] in test_p},
+    assign = _assign_param_splits(
+        df,
+        seed=seed,
+        calib_frac=calib_frac,
+        stratify=stratify,
+        target=target,
+        n_bins=n_bins,
     )
+    return _param_sims_from_assignment(df, assign)
 
 
-def _save_split(path, train_ps, val_ps, test_ps, df):
+def _save_split(path, split_ps: SplitParamSims):
     """
     Save parameter-simulation split assignments.
 
     Args:
         path: Output CSV path.
-        train_ps: Training pairs.
-        val_ps: Validation pairs.
-        test_ps: Test pairs.
+        split_ps: Split parameter-simulation sets.
         df: Source dataframe.
 
     Returns:
         None.
     """
-    rows = []
-    for ps, split in (
-        [(p, "train") for p in train_ps] + [(p, "validate") for p in val_ps] + [(p, "test") for p in test_ps]
-    ):
-        rows.append(
-            {"parameter_index": ps[0], "simulation_index": ps[1], "split": split}
+    rows = [
+        (param_idx, sim_idx, split)
+        for split, ps in (
+            ("train", split_ps.train),
+            ("validate", split_ps.val),
+            ("test", split_ps.test),
+            ("calibrate", split_ps.calib),
         )
-    pd.DataFrame(rows).to_csv(path, index=False)
+        for param_idx, sim_idx in ps
+    ]
+    pd.DataFrame(rows, columns=["parameter_index", "simulation_index", "split"]).to_csv(path, index=False)
     log.info(f"Split saved to {path}")
 
-def _fit_scaler(df: pd.DataFrame, train_ps: set[tuple[int, int]], output_dir: str) -> StandardScaler:
+def _fit_scaler(df: pd.DataFrame, train_ps: set[tuple[int, int]], output_dir: str, features: list[str] = FEATURES_BASE) -> StandardScaler:
     """
     Fit and save the static covariate scaler.
 
@@ -134,16 +251,16 @@ def _fit_scaler(df: pd.DataFrame, train_ps: set[tuple[int, int]], output_dir: st
         df: Filtered dataframe.
         train_ps: Training pairs.
         output_dir: Directory for scaler output.
+        features: List of feature columns to use.
 
     Returns:
         Fitted scaler.
     """
     train_mask = df["_ps"].isin(train_ps)
     train_static = (
-        df.loc[train_mask, ["_ps"] + FEATURES_BASE]
-        .drop_duplicates(subset=["_ps"])[FEATURES_BASE]
-        .astype(np.float32)
-        .values
+        df.loc[train_mask, ["_ps"] + features]
+        .drop_duplicates(subset=["_ps"])[features]
+        .to_numpy(dtype=np.float32)
     )
     scaler = StandardScaler()
     scaler.fit(train_static)
@@ -155,14 +272,55 @@ def _fit_scaler(df: pd.DataFrame, train_ps: set[tuple[int, int]], output_dir: st
 
     return scaler
 
+def _fit_target_scaler(df: pd.DataFrame, train_ps: set[tuple[int, int]], output_dir: str, target: str = "eir") -> StandardScaler:
+    """
+    Fit and save the target scaler.
+
+    Args:
+        df: Filtered dataframe.
+        train_ps: Training pairs.
+        output_dir: Directory for scaler output.
+        target: Target column to scale.
+    Returns:
+        Fitted scaler.
+    """
+    train_mask = df["_ps"].isin(train_ps)
+    train_y = (
+        df.loc[train_mask, ["_ps", target]]
+        .drop_duplicates(subset=["_ps"])[target]
+        .to_numpy(dtype=np.float32)
+    )
+    scaler = StandardScaler()
+    scaler.fit(np.log10(train_y)[:, None])  # Fit on log10 of target
+
+    save_path = Path(output_dir) / "target_scaler.pkl"
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(save_path, "wb") as f:
+        pickle.dump(scaler, f)
+    return scaler
+
 def _build_data(
     df: pd.DataFrame,
     param_sims: set[tuple[int, int]],
     scaler: StandardScaler,
-    cfg: DictConfig,
+    target_scaler: StandardScaler,
+    features: list[str] = FEATURES_BASE,
+    target: str = "eir"
 ) -> list[dict[str, np.ndarray]]:
     """
+    Build scaled per-parameter-simulation training records.
 
+    Args:
+        df: Filtered dataframe with feature, target, and ``_weight`` columns.
+        param_sims: Parameter-simulation pairs to include.
+        scaler: Fitted static feature scaler.
+        target_scaler: Fitted target scaler.
+        features: Feature columns to scale and include as model inputs.
+        target: Positive target column to log-transform.
+
+    Returns:
+        A list of sequence dictionaries containing scaled features, raw
+        features, log10 targets, raw targets, sample weights, and pair IDs.
     """
     groups = df.groupby(["parameter_index", "simulation_index"])
     data = []
@@ -171,24 +329,29 @@ def _build_data(
         if ps not in groups.groups:
             continue
 
-        df["eir_log10"] = np.log10(df["eir"], dtype=np.float32) # TODO: do we need to log10?
-        X = (
-            df.loc[groups.groups[ps], FEATURES_BASE]
-            .astype(np.float32)
-            .values
-        )
-        Y = df.loc[groups.groups[ps], "eir_log10"].values
+        group_idx = groups.groups[ps]
+        X_raw = df.loc[group_idx, features].to_numpy(dtype=np.float32)[0]
+        X = scaler.transform(X_raw)
+        Y_raw = df.loc[group_idx, target].to_numpy(dtype=np.float32)[0]
+        Y = np.log10(Y_raw)
+        Y_std = target_scaler.transform(np.array([[Y]], dtype=np.float32))[0, 0]
+        W = df.loc[group_idx, "_weight"].to_numpy(dtype=np.float32)[0]
         data.append(
             {
+                "x_raw": X_raw,
                 "x": X,
+                "y_raw": Y_raw,
                 "y": Y,
+                "y_std": Y_std,
+                "w": W,
                 "ps": np.asarray(ps, dtype=np.int32),  # (2,) parameter_index, simulation_index
             }
         )
 
     return data
 
-def prepare_data(df: pd.DataFrame, cfg: DictConfig):
+# TODO: sort out exisitng splits and files with different models etc
+def prepare_data(df: pd.DataFrame, cfg: DictConfig, calib_frac: float = 0.0) -> PreparedData:
     """
     Split and transform raw simulation data.
 
@@ -212,35 +375,45 @@ def prepare_data(df: pd.DataFrame, cfg: DictConfig):
 
     # Filter by threshold
     df = _filter_by_threshold(df)
-
-
+    df["_weight"] = make_value_weights(df[cfg.target].to_numpy(dtype=np.float32))
     # split data
     if cfg.use_existing_split and Path(cfg.split_file).exists():
         log.info(f"Loading existing split from {cfg.split_file}")
-        train_ps, val_ps, test_ps = _load_split(cfg.split_file, df)
+        split_ps = _load_split(cfg.split_file, df)
     else:
-        log.info("Creating new train/val/test split (70/15/15)")
-        train_ps, val_ps, test_ps = _create_split(df, cfg.seed)
+        log.info("Creating new train/val/calib/test split")
+        split_ps = _create_split(df, cfg.seed, stratify=cfg.stratify, target=cfg.target, calib_frac=calib_frac)
         if cfg.split_file:
             log.info(f"Saving split to {cfg.split_file}")
-            _save_split(cfg.split_file, train_ps, val_ps, test_ps, df)
+            _save_split(cfg.split_file, split_ps)
 
-    log.info(f"Split — train: {len(train_ps)}, val: {len(val_ps)}, test: {len(test_ps)}")
+    log.info(
+        "Split — train: %s, val: %s, calib: %s, test: %s",
+        len(split_ps.train),
+        len(split_ps.val),
+        len(split_ps.calib),
+        len(split_ps.test),
+    )
 
-    scaler = _fit_scaler(df, train_ps, cfg.output_dir) # TODO fix scaling
+    scaler = _fit_scaler(df, split_ps.train, cfg.output_dir) # TODO fix scaling
+    target_scaler = _fit_target_scaler(df, split_ps.train, cfg.output_dir, target=cfg.target)
 
-    train_data = _build_data(df, train_ps, scaler, cfg)
-    val_data = _build_data(df, val_ps, scaler, cfg)
-    test_data = _build_data(df, test_ps, scaler, cfg)
+    train_data = _build_data(df, split_ps.train, scaler, target_scaler, target=cfg.target)
+    val_data = _build_data(df, split_ps.val, scaler, target_scaler, target=cfg.target)
+    test_data = _build_data(df, split_ps.test, scaler, target_scaler, target=cfg.target)
+    calib_data = _build_data(df, split_ps.calib, scaler, target_scaler, target=cfg.target)
 
     return PreparedData(
         train_data=train_data,
         val_data=val_data,
         test_data=test_data,
+        calib_data=calib_data,
         input_size=len(FEATURES_BASE),
         scaler=scaler,
-        train_param_sims=train_ps,
-        val_param_sims=val_ps,
-        test_param_sims=test_ps,
+        target_scaler=target_scaler,
+        train_param_sims=split_ps.train,
+        val_param_sims=split_ps.val,
+        test_param_sims=split_ps.test,
+        calib_param_sims=split_ps.calib
     )
 

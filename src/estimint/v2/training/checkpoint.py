@@ -38,44 +38,6 @@ def restore_model(
     return model
 
 
-def init_or_restore_last(
-    ckptr: ocp.training.Checkpointer,
-    model: nnx.Module,
-    optimizer: nnx.Optimizer,
-    restore_checkpoint: bool = False,
-) -> tuple[nnx.Module, nnx.Optimizer, int, float]:
-    """
-    Initialize or restore model and optimizer from checkpoint.
-
-    Args:
-        ckptr: Orbax checkpointer.
-        model: Model to restore.
-        optimizer: Optimizer to restore.
-        restore_checkpoint: Whether to restore from checkpoint.
-
-    Returns:
-        Model, optimizer, start epoch, and validation loss from the checkpoint.
-    """
-    if not restore_checkpoint or not ckptr.latest:
-        log.info("Initializing model and optimizer from scratch.")
-        return model, optimizer, 0, float("inf")
-
-    log.info(f"Restoring model and optimizer from checkpoint: {ckptr.latest.step}")
-    loaded_state = ckptr.load_checkpointables(
-        abstract_checkpointables={
-            "model": nnx.state(model),
-            "optimizer": nnx.state(optimizer),
-        }
-    )
-    nnx.update(model, loaded_state["model"])
-    nnx.update(optimizer, loaded_state["optimizer"])
-    metadata = ckptr.metadata()
-    metrics: dict[str, Any] = metadata.metrics if isinstance(metadata.metrics, dict) else {}
-    val_loss = float(metrics.get("val/loss", float("inf")))
-
-    return model, optimizer, ckptr.latest.step + 1, val_loss
-
-
 @dataclass
 class CheckpointSession:
     ckptr: ocp.training.Checkpointer

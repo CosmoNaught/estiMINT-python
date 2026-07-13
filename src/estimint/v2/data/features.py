@@ -1,7 +1,8 @@
 import numpy as np
 
-# TODO: update to handle eir-> hbr, hbr -> eir
-FEATURES_BASE = ["dn0_use", "Q0", "phi_bednets", "seasonal", "itn_use", "irs_use", "prev_y9"]
+# TODO: update to handle eir-> hbr, hbr -> eir (move prev9)
+FEATURES_BASE = ["prev_y9", "dn0_use", "Q0", "phi_bednets", "seasonal", "itn_use", "irs_use"]
+MONOTONIC_FEATURES = ["prev_y9", "hbr_y9"]
 
 class StandardScaler:
     def __init__(self):

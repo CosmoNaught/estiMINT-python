@@ -31,6 +31,7 @@ dependencies = [
     "jaxtyping>=0.3.10",
     "omegaconf>=2.3",
     "orbax-checkpoint>=0.12.0",
+    "wandb>=0.28.0",
 ]
 
 [project.optional-dependencies]
