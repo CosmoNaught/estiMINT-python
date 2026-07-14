@@ -56,82 +56,6 @@ class RQSBundle:
         y0 = np.mean(_forward(self.models, context, quantile), axis=0)
         return np.maximum(0, np.power(10, self.scaler_y.inverse_transform(y0))) # return in original scale
 
-
-def _rqs(x: jax.Array, raw_widths: jax.Array, raw_heights: jax.Array, raw_derivatives: jax.Array, bounds: int, inverse=False):
-    """Evaluate the monotone rational-quadratic spline
-
-    Args:
-        x               : (B,) points to transform. Will be z for inverse=False and y for inverse=True.
-        raw_widths      : (B,K)   unconstrained bin WIDTHS (softmax'd to sum to 2B).
-        raw_heights     : (B,K)   unconstrained bin HEIGHTS (softmax'd to sum to 2B).
-        raw_derivatives : (B,K+1) unconstrained knot DERIVATIVES (softplus'd to be positive).
-        inverse         : False computes z = T(x); True computes x = T^{-1}(z).
-        inverse : False computes z = T(x); True computes x = T^{-1}(z).
-
-    Returns
-        (transformed, log|derivative|).
-    """
-    B, K = raw_widths.shape
-    # unconstrained widths/heights/derivatives -> +ve and sum to 2*bounds
-    widths = jax.nn.softmax(raw_widths, axis=-1) * (2 * bounds)
-    heights = jax.nn.softmax(raw_heights, axis=-1) * (2 * bounds)
-    derivatives = jax.nn.softplus(raw_derivatives) + 1e-3
-    # cumulative sums to get knot locations. starting at -bounds.
-    knot_x = jnp.concatenate([jnp.full((B, 1), -bounds), - bounds + jnp.cumsum(widths, axis=-1)], axis=-1) # (B, K+1)
-    knot_y = jnp.concatenate([jnp.full((B, 1), -bounds), - bounds + jnp.cumsum(heights, axis=-1)], axis=-1) # (B, K+1)
-
-    in_domain = (x > -bounds) & (x < bounds)
-    x_clamped = jnp.clip(x, -bounds + 1e-6, bounds - 1e-6)
-    # forward search for knot_x for input x. inverse searches for knot_y for input z
-    knot_coords_to_search = knot_y if inverse else knot_x
-    bin_idx = jnp.sum((x_clamped[..., None] >= knot_coords_to_search[:,:-1]).astype(jnp.int32), axis=-1) - 1 # (B,) which bin each x is in
-    bin_idx = jnp.clip(bin_idx, 0, K - 1)
-
-    def take_per_row(knot, bin_idx):
-        """Select knot[i, bin_idx[i]] for each row i in knot."""
-        return jnp.take_along_axis(knot, bin_idx[:, None], axis=1)[:, 0]
-
-    # Left/right knot values bracketing each point's bin.
-    x_lo, x_hi = take_per_row(knot_x, bin_idx), take_per_row(knot_x, bin_idx + 1)
-    y_lo, y_hi = take_per_row(knot_y, bin_idx), take_per_row(knot_y, bin_idx + 1)
-    deriv_lo, deriv_hi = take_per_row(derivatives, bin_idx), take_per_row(derivatives, bin_idx + 1)
-    bin_slope = (y_hi - y_lo) / (x_hi - x_lo)
-
-    if not inverse:
-        # forward transform: z = T(x)
-        theta = (x_clamped - x_lo) / (x_hi - x_lo)
-        theta_comp = 1.0 - theta
-        numerator = (y_hi - y_lo) * (bin_slope * theta**2 + deriv_lo * theta * theta_comp)
-        denominator = bin_slope + (deriv_hi + deriv_lo - 2 * bin_slope) * theta * theta_comp
-        z = y_lo + numerator / denominator # z = T(x)
-
-        deriv_numerator = bin_slope**2 * (
-            deriv_hi * theta**2 + 2 * bin_slope * theta * theta_comp + deriv_lo * theta_comp**2
-        )
-        log_abs_det = jnp.log(deriv_numerator) - 2 * jnp.log(denominator)
-
-        return jnp.where(in_domain, z, x), jnp.where(in_domain, log_abs_det, 0.0)
-    else:
-        # inverse transform: x = t^{-1}(z)
-        # Solve for theta theta via the quadratic a*theta^2 + b*theta + c = 0
-        y_offest = x_clamped - y_lo
-        slope_term = deriv_hi + deriv_lo - 2 * bin_slope
-        a = (y_hi - y_lo) * (bin_slope - deriv_lo) + y_offest * slope_term
-        b = (y_hi - y_lo) * deriv_lo - y_offest * slope_term
-        c = -bin_slope * y_offest
-
-        theta = 2 * c / (-b - jnp.sqrt(jnp.maximum(b**2 - 4 * a * c, 0.0))) # quadratic formula
-        theta_comp = 1.0 - theta
-        x_out = theta * (x_hi - x_lo) + x_lo # x = T^{-1}(z)
-
-        denominator = bin_slope + slope_term * theta * theta_comp
-        deriv_numerator = bin_slope**2 * (
-            deriv_hi * theta**2 + 2 * bin_slope * theta * theta_comp + deriv_lo * theta_comp**2
-        )
-        # d(T^{-1})/dz = 1 / (dT/dx).
-        log_abs_det = -(jnp.log(deriv_numerator) - 2 * jnp.log(denominator))
-        return jnp.where(in_domain, x_out, x), jnp.where(in_domain, log_abs_det, 0.0)
-
 def rqs_loss(model, X, y0, w):
     """
     Compute the negative log-likelihood loss for the conditional rational-quadratic spline flow model.
@@ -146,3 +70,101 @@ def rqs_loss(model, X, y0, w):
     """
     log_prob = model.log_prob(y0, X)
     return -jnp.sum(w * log_prob) / jnp.sum(w)
+
+
+# ------------ RQS utils ----------------
+def _spline_knots(raw_widths: jax.Array, raw_heights: jax.Array, raw_derivatives: jax.Array, bounds: int, n_points: int):
+    """Map unconstrained net outputs to positive bin sizes/derivatives and knot coordinates.
+
+    Widths and heights are softmax'd to sum to 2*bounds, so their cumulative sums
+    (starting at -bounds) land exactly on +bounds. Derivatives are softplus'd to
+    stay positive.
+    """
+    widths = jax.nn.softmax(raw_widths, axis=-1) * (2 * bounds)
+    heights = jax.nn.softmax(raw_heights, axis=-1) * (2 * bounds)
+    derivatives = jax.nn.softplus(raw_derivatives) + 1e-3
+
+    knot_x = jnp.concatenate([jnp.full((n_points, 1), -bounds), -bounds + jnp.cumsum(widths, axis=-1)], axis=-1)  # (n_points, K+1)
+    knot_y = jnp.concatenate([jnp.full((n_points, 1), -bounds), -bounds + jnp.cumsum(heights, axis=-1)], axis=-1)  # (n_points, K+1)
+    return knot_x, knot_y, derivatives
+
+
+def _locate_bin(x: jax.Array, knots: jax.Array, n_bins: int) -> jax.Array:
+    """Index k of the bin containing x, i.e. knots[k] <= x < knots[k+1]."""
+    bin_idx = jnp.sum((x[..., None] >= knots[:, :-1]).astype(jnp.int32), axis=-1) - 1
+    return jnp.clip(bin_idx, 0, n_bins - 1)
+
+
+def _gather_bin(knot: jax.Array, bin_idx: jax.Array):
+    """Return (knot[i, bin_idx[i]], knot[i, bin_idx[i] + 1]) for every row i."""
+    lo = jnp.take_along_axis(knot, bin_idx[:, None], axis=1)[:, 0]
+    hi = jnp.take_along_axis(knot, bin_idx[:, None] + 1, axis=1)[:, 0]
+    return lo, hi
+
+
+def _rqs_logdet(theta: jax.Array, s: jax.Array, d_lo: jax.Array, d_hi: jax.Array):
+    """log|dz/dx| at spline-local parameter theta in [0, 1] (Durkan et al. 2019, eq. 5).
+
+    Also returns the shared denominator and (1 - theta), which the forward pass reuses.
+    """
+    theta_comp = 1.0 - theta
+    denom = s + (d_hi + d_lo - 2 * s) * theta * theta_comp
+    deriv_numer = s**2 * (d_hi * theta**2 + 2 * s * theta * theta_comp + d_lo * theta_comp**2)
+    log_abs_det = jnp.log(deriv_numer) - 2 * jnp.log(denom)
+    return log_abs_det, denom, theta_comp
+
+
+def _solve_theta(z: jax.Array, y_lo: jax.Array, dy: jax.Array, s: jax.Array, d_lo: jax.Array, d_hi: jax.Array):
+    """Invert eq. for theta given a target z: solve a*theta^2 + b*theta + c = 0.
+
+    """
+    dz = z - y_lo
+    slope_term = d_hi + d_lo - 2 * s
+    a = dy * (s - d_lo) + dz * slope_term
+    b = dy * d_lo - dz * slope_term
+    c = -s * dz
+    return 2 * c / (-b - jnp.sqrt(jnp.maximum(b**2 - 4 * a * c, 0.0)))
+
+
+def _rqs(x: jax.Array, raw_widths: jax.Array, raw_heights: jax.Array, raw_derivatives: jax.Array, bounds: int, inverse=False):
+    """Evaluate the monotone rational-quadratic spline (Durkan et al. 2019, "Neural Spline Flows").
+
+    Args:
+        x               : (B,) points to transform. Will be z for inverse=False and y for inverse=True.
+        raw_widths      : (B,K)   unconstrained bin widths.
+        raw_heights     : (B,K)   unconstrained bin heights.
+        raw_derivatives : (B,K+1) unconstrained knot derivatives.
+        bounds          : the spline is the identity outside [-bounds, bounds].
+        inverse         : False computes z = T(x); True computes x = T^{-1}(z).
+
+    Returns:
+        (transformed, log|d(transformed)/dx|).
+    """
+    n_points, n_bins = raw_widths.shape
+    knot_x, knot_y, derivatives = _spline_knots(raw_widths, raw_heights, raw_derivatives, bounds, n_points)
+
+    in_domain = (x > -bounds) & (x < bounds)
+    x_clamped = jnp.clip(x, -bounds + 1e-6, bounds - 1e-6)
+
+    # forward looks up knot_x for x; inverse looks up knot_y for z.
+    bin_idx = _locate_bin(x_clamped, knot_y if inverse else knot_x, n_bins)
+    x_lo, x_hi = _gather_bin(knot_x, bin_idx)
+    y_lo, y_hi = _gather_bin(knot_y, bin_idx)
+    d_lo, d_hi = _gather_bin(derivatives, bin_idx)
+    dx, dy = x_hi - x_lo, y_hi - y_lo
+    s = dy / dx  # bin slope
+
+    if inverse:
+        theta = _solve_theta(x_clamped, y_lo, dy, s, d_lo, d_hi)
+        log_dzdx, _, _ = _rqs_logdet(theta, s, d_lo, d_hi)
+        out = theta * dx + x_lo  # x = T^{-1}(z)
+        log_abs_det = -log_dzdx  # d(T^{-1})/dz = 1 / (dz/dx)
+    else:
+        theta = (x_clamped - x_lo) / dx
+        log_dzdx, denom, theta_comp = _rqs_logdet(theta, s, d_lo, d_hi)
+        numer = dy * (s * theta**2 + d_lo * theta * theta_comp)
+        out = y_lo + numer / denom  # z = T(x)
+        log_abs_det = log_dzdx
+
+    return jnp.where(in_domain, out, x), jnp.where(in_domain, log_abs_det, 0.0)
+
