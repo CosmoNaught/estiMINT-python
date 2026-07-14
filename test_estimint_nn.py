@@ -43,10 +43,35 @@ from estimint.data_processing import make_value_weights
 
 # DATA code, now living in src/estimint/v2/data/ (SECTIONS 1 & 2 moved there).
 # group_split lives in preprocess.py alongside the existing parameter split.
-from estimint.v2.data.preprocess import create_splits
-from estimint.v2.data.features import resolve_mono, StandardScaler
+from estimint.v2.data.preprocess import _create_split
+from estimint.v2.data.features import StandardScaler
+
+FEATURES_BASE = [
+    "dn0_use",
+    "Q0",
+    "phi_bednets",
+    "seasonal",
+    "itn_use",
+    "irs_use",
+    "prev_y9",
+]
+
+# The two monotone inputs to EIR. The monotone model (MonotoneUMNN) resolves its
+# constrained feature by NAME via resolve_mono(), so feature column order is
+# irrelevant (FEATURES_BASE keeps prev_y9 last).
+MONO_FEATURES = ("prev_y9", "hbr_y9")
 
 
+def resolve_mono(features: list[str]) -> int | None:
+    """Return the index of the monotone feature in ``features``, or None.
+
+    None means there is no monotone input (e.g. the EIR->HBR forward map), in
+    which case a monotone model does not apply.
+    """
+    for name in MONO_FEATURES:
+        if name in features:
+            return features.index(name)
+    return None
 # ============================================================================
 # TIER CONFIGS  ->  src/estimint/v2/conf/train_config.yaml  (or a dataclass)
 # ----------------------------------------------------------------------------
@@ -633,11 +658,9 @@ def _prep(df, features, target, seed, stratify, calib_frac):
 
     df["_ps"] = list(zip(df["parameter_index"], df["simulation_index"]))
     df["_weight"] = make_value_weights(df[target].to_numpy(dtype=np.float64), digits=3)
-    splits = create_splits(
+    splits = _create_split(
         df,
         seed=seed,
-        val_frac=0.10,
-        test_frac=0.10,
         calib_frac=calib_frac,
         stratify=stratify,
         target=target,
@@ -790,7 +813,7 @@ def train_fm(
 # tier="max" on GPU. Also exercises the residual MLP + warmup path.
 # ============================================================================
 if __name__ == "__main__":
-    TIER = "smoke"  # switch to "solid" / "max" on GPU
+    TIER = "max"  # switch to "solid" / "max" on GPU
     df = pd.read_parquet("models/prevalence/training.parquet")
     feats = [
         "dn0_use",
@@ -825,10 +848,10 @@ if __name__ == "__main__":
     print(f"  90% coverage: raw={cov_raw:.3f}  conformalized={cov_conf:.3f}")
 
     print("== ConditionalFM (EXPERIMENTAL, prev->EIR) ==")
-    fm, (Xte3, yte3) = train_fm(df, feats, tier=TIER, n_steps=50, n_samples=64)
-    p3 = fm.predict(Xte3)
-    clo3, chi3 = fm.interval(Xte3, alpha=0.10)
-    cov3 = float(np.mean((yte3 >= clo3) & (yte3 <= chi3)))
-    print(f"  test R2={r2(yte3, p3):.4f}  RMSE={rmse(yte3, p3):.2f}  MAE={mae(yte3, p3):.2f}")
-    print(f"  90% conformalized coverage={cov3:.3f}   (vs RQS above — expect FM ~= RQS at best)")
+    # fm, (Xte3, yte3) = train_fm(df, feats, tier=TIER, n_steps=50, n_samples=64)
+    # p3 = fm.predict(Xte3)
+    # clo3, chi3 = fm.interval(Xte3, alpha=0.10)
+    # cov3 = float(np.mean((yte3 >= clo3) & (yte3 <= chi3)))
+    # print(f"  test R2={r2(yte3, p3):.4f}  RMSE={rmse(yte3, p3):.2f}  MAE={mae(yte3, p3):.2f}")
+    # print(f"  90% conformalized coverage={cov3:.3f}   (vs RQS above — expect FM ~= RQS at best)")
     print("SMOKE_OK")

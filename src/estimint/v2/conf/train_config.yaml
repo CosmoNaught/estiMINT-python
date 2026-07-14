@@ -12,6 +12,8 @@ depth: 4
 n_quad: 96
 mlp_residual: false
 dropout_rate: 0.0
+n_bins: 24
+rqs_bounds: 6
 
 # Hyperparameters
 num_epochs: 300
@@ -21,7 +23,6 @@ lr: 1e-3
 batch_size: 256
 weight_decay: 1e-4
 n_ensembles: 1
-n_bins: 24
 
 # Checkpoint
 checkpoint_dir: "${output_dir}/ckpts-${cur_time}"

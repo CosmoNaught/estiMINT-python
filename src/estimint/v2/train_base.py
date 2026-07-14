@@ -24,6 +24,7 @@ from estimint.utils import r2, rmse, mae, mse
 from estimint.v2.eval.metrics import compute_metrics
 from typing import Callable
 from jaxtyping import Array
+from .models.rqs import ConditionalRQS, rqs_loss
 
 logging.getLogger("absl").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
@@ -149,8 +150,15 @@ def train_umnn(cfg: DictConfig, prepared_data: PreparedData) -> UMNNBundle:
     return umnn_bundle
 
 def train_rqs(cfg: DictConfig, prepared_data: PreparedData):
+    models = []
+    for ensemble in range(cfg.n_ensembles):
+        model = ConditionalRQS(len(FEATURES_BASE), rngs=nnx.Rngs(cfg.seed + ensemble), width=cfg.width, depth=cfg.depth, n_bins=cfg.n_bins, bounds=cfg.rqs_bounds, residual=cfg.mlp_residual, dropout_rate=cfg.dropout_rate)
+        if ensemble == 0:
+            log.info(f"Total parameters: {get_total_params(model) / 1e6:.2f}M")
+        model = train_model(model, cfg, prepared_data, rqs_loss, use_standardized_y=True)
+        models.append(model)
 
-
+    return models
 
 @hydra.main(version_base=None, config_path="conf", config_name="train_config")
 def main(cfg: DictConfig) -> None:
@@ -170,7 +178,8 @@ def main(cfg: DictConfig) -> None:
 
     prepared_data = prepare_data(raw_df, cfg, calib_frac=cfg.calib_frac)
 
-    umnn_bundle = train_umnn(cfg, prepared_data)
+    # umnn_bundle = train_umnn(cfg, prepared_data)
+    models = train_rqs(cfg, prepared_data)
 
     if cfg.use_wandb:
         wandb.finish()

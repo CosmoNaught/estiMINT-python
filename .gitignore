@@ -50,7 +50,6 @@ models/**/*.model
 models/**/plots/
 
 models/**/metrics/
-split.csv
 
 # Test / coverage
 .coverage

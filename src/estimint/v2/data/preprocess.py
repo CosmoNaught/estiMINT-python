@@ -10,7 +10,7 @@ from .features import StandardScaler, FEATURES_BASE
 from estimint.data_processing import make_value_weights
 import pickle
 from dataclasses import dataclass, field
-
+from typing import cast
 log = logging.getLogger(__name__)
 
 @dataclass
@@ -322,20 +322,22 @@ def _build_data(
         A list of sequence dictionaries containing scaled features, raw
         features, log10 targets, raw targets, sample weights, and pair IDs.
     """
-    groups = df.groupby(["parameter_index", "simulation_index"])
+    # One row per (parameter_index, simulation_index): features/target are
+    # static per simulation, so any row in the group carries the same values.
+    rows = df.groupby(["parameter_index", "simulation_index"]).first()
     data = []
 
     for ps in param_sims:
-        if ps not in groups.groups:
+        if ps not in rows.index:
             continue
 
-        group_idx = groups.groups[ps]
-        X_raw = df.loc[group_idx, features].to_numpy(dtype=np.float32)[0]
+        row = cast(pd.Series, rows.loc[ps])
+        X_raw = row[features].to_numpy(dtype=np.float32)
         X = scaler.transform(X_raw)
-        Y_raw = df.loc[group_idx, target].to_numpy(dtype=np.float32)[0]
+        Y_raw = np.float32(row[target])
         Y = np.log10(Y_raw)
         Y_std = target_scaler.transform(np.array([[Y]], dtype=np.float32))[0, 0]
-        W = df.loc[group_idx, "_weight"].to_numpy(dtype=np.float32)[0]
+        W = np.float32(row["_weight"])
         data.append(
             {
                 "x_raw": X_raw,

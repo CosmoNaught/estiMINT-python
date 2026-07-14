@@ -7,7 +7,7 @@ import jax.numpy as jnp
 
 
 class MonotoneUMNN(nnx.Module):
-    def __init__(self, n_context, *, width=128, depth=4, n_quad=48, mlp_residual=False, dropout_rate=0.1, rngs: nnx.Rngs):
+    def __init__(self, n_context, *, width=128, depth=4, n_quad=48, mlp_residual=False, dropout_rate=0.0, rngs: nnx.Rngs):
         self.bias = MLP(n_context, 1, width=width, depth=depth, residual=mlp_residual, dropout_rate=dropout_rate, rngs=rngs)
         self.integrand = MLP(n_context + 1, 1, width=width, depth=depth, residual=mlp_residual, dropout_rate=dropout_rate, rngs=rngs)
         # leggauss(n) returns nodes/weights for integrating on [-1, 1]. We'll
