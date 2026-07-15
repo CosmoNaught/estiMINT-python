@@ -16,7 +16,7 @@ n_bins: 24
 rqs_bounds: 6
 
 # Hyperparameters
-num_epochs: 200
+num_epochs: 150
 min_epochs: 100
 patience: 50
 lr: 1e-3

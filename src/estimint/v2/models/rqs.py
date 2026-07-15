@@ -69,56 +69,20 @@ def _forward_quantiles(model: nnx.Module, context: jnp.ndarray, probs: jnp.ndarr
     return model.quantiles(context, probs) # type: ignore
 
 class RQSArtifact:
-    # Number of quantile levels used to numerically integrate the conditional
-    # mean E[EIR] = ∫_0^1 F^{-1}(q) dq via the midpoint rule.
-    N_MEAN_QUANTILES = 128
-
     def __init__(self, model: nnx.Module, feature_scaler: StandardScaler, target_scaler: StandardScaler, features: list[str]):
         self.model = model
         self.feature_scaler = feature_scaler
         self.target_scaler = target_scaler
         self.features = features
         self.conformal = {} # alpha -> offset Q
-        self.calibrator = None  # qmap dict from fit_qmap_w, applied to point predictions
-        self.scale = 1.0        # positive multiplicative debias applied after qmap
 
     def _quantile(self, X_raw: np.ndarray, quantile: float) -> np.ndarray:
         context = jnp.array(self.feature_scaler.transform(X_raw))
         y0 = _forward(self.model, context, quantile)
         return np.maximum(0, np.power(10, self.target_scaler.inverse_transform(y0)))
 
-    def _raw_mean(self, X_raw: np.ndarray) -> np.ndarray:
-        """Uncalibrated conditional mean E[EIR] by integrating the flow's quantiles."""
-        probs = (np.arange(self.N_MEAN_QUANTILES) + 0.5) / self.N_MEAN_QUANTILES
-        context = jnp.array(self.feature_scaler.transform(X_raw))
-        y0 = np.asarray(_forward_quantiles(self.model, context, jnp.asarray(probs)))  # (Q, B)
-        eir = np.maximum(0, np.power(10, self.target_scaler.inverse_transform(y0)))  # (Q, B)
-        return eir.mean(axis=0)
-
-    def _apply_calibration(self, pred: np.ndarray) -> np.ndarray:
-        """Apply fitted QMAP + positive scale, if a calibrator has been fit."""
-        if self.calibrator is None:
-            return pred
-        return np.maximum(0, self.scale * predict_qmap_w(pred, self.calibrator))
-
-    def fit_calibrator(self, X_raw: np.ndarray, y_raw: np.ndarray, ngrid: int = 1024) -> None:
-        """Fit QMAP + positive-scale calibration for point predictions on a held-out split.
-
-        Mirrors the XGBoost pipeline: map the predicted marginal onto the observed
-        marginal, then apply a positive multiplicative debias.
-        """
-        base = self._raw_mean(X_raw)
-        cal = fit_qmap_w(base, y_raw, ngrid=ngrid)
-        calibrated = predict_qmap_w(base, cal)
-        self.scale = scale_pos(y_raw, calibrated)
-        self.calibrator = cal
-
     def predict(self, X_raw: np.ndarray) -> np.ndarray:
-        """Calibrated conditional-mean prediction (falls back to raw mean if uncalibrated)."""
-        return self._apply_calibration(self._raw_mean(X_raw))
-
-    def predict_median(self, X_raw: np.ndarray) -> np.ndarray:
-        return self._quantile(X_raw, 0.5)
+        return self._quantile(X_raw, 0.5) # median prediction
 
     def quantile(self, X_raw: np.ndarray, quantile: float) -> np.ndarray:
         return self._quantile(X_raw, quantile)
