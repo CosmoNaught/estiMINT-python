@@ -2,6 +2,7 @@ from flax import nnx
 import optax
 from typing import Callable
 from jaxtyping import Array
+
 def create_optimizer(
     model: nnx.Module, learning_rate: float, total_steps: int, weight_decay: float = 1e-4
 ) -> nnx.Optimizer:
