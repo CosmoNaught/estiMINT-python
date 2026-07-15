@@ -13,10 +13,10 @@ class Metrics:
     bias: float
 
 def compute_metrics(
-    model_bundle,
+    model_artifact,
     loader: DataLoader,
 ):
-    preds, targets = get_preds_targets(model_bundle, loader)
+    preds, targets = get_preds_targets(model_artifact, loader)
 
     return Metrics(
         mse=mse(targets, preds),
@@ -27,14 +27,15 @@ def compute_metrics(
     )
 
 
-def get_preds_targets(model_bundle, data_loader: DataLoader) -> tuple[np.ndarray, np.ndarray]:
+def get_preds_targets(model_artifact, data_loader: DataLoader) -> tuple[np.ndarray, np.ndarray]:
     all_preds, all_targets = [], []
     for batch in data_loader:
-        preds = model_bundle.predict(batch["x_raw"])
+        preds = model_artifact.predict(batch["x_raw"])
         all_preds.append(preds)
         all_targets.append(batch["y_raw"])
-    all_preds = np.concat(all_preds, axis=0)
-    all_targets = np.concat(all_targets, axis=0)
+
+    all_preds = np.concat(all_preds)
+    all_targets = np.concat(all_targets)
 
     return all_preds, all_targets
 

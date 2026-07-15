@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from hydra.utils import get_method
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
-from .models.umnn import MonotoneUMNN, umnn_loss, UMNNBundle
+from .models.umnn import MonotoneUMNN, umnn_loss, UMNNArtifact
 from .data.preprocess import PreparedData, prepare_data
 from .data.dataset import make_loader
 import wandb
@@ -24,7 +24,7 @@ from estimint.utils import r2, rmse, mae, mse
 from estimint.v2.eval.metrics import compute_metrics
 from typing import Callable
 from jaxtyping import Array
-from .models.rqs import ConditionalRQS, rqs_loss, RQSBundle, conformal_offset
+from .models.rqs import ConditionalRQS, rqs_loss, RQSArtifact, conformal_offset
 
 logging.getLogger("absl").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ def train_model(
     cfg: DictConfig,
     prepared_data: PreparedData,
     loss_fn: Callable[[nnx.Module, Array, Array, Array], Array],
+    name: str,
     use_standardized_y: bool = False,
     ) -> nnx.Module:
     train_step = make_train_step(loss_fn)
@@ -107,22 +108,29 @@ def train_model(
                 break
 
     nnx.update(model, best_model)
+    # --------- checkpointing the best model ---------
+    ckpt_dir = (epath.Path(cfg.checkpoint_dir) / name).resolve()
+    preservation_policy = ocp.training.preservation_policies.LatestN(n=1)
+    with ocp.training.Checkpointer(ckpt_dir, preservation_policy=preservation_policy) as ckptr: # type: ignore[arg-type]
+        ckptr.save_checkpointables(
+            0,
+            {
+                "model": nnx.state(model),
+            },
+            overwrite=True
+        )
     return model
 
 
-def train_umnn(cfg: DictConfig, prepared_data: PreparedData) -> UMNNBundle:
-    models = []
-    for ensemble in range(cfg.n_ensembles):
-        model = MonotoneUMNN(len(FEATURES_BASE) - 1, rngs=nnx.Rngs(cfg.seed + ensemble), width=cfg.width, depth=cfg.depth, n_quad=cfg.n_quad, mlp_residual=cfg.mlp_residual, dropout_rate=cfg.dropout_rate)
-        if ensemble == 0:
-            log.info(f"Total parameters: {get_total_params(model) / 1e6:.2f}M")
-        model = train_model(model, cfg, prepared_data, umnn_loss)
-        models.append(model)
-        # TODO: unsure if need to ensemble
-    umnn_bundle = UMNNBundle(models, prepared_data.feature_scaler, FEATURES_BASE)
+def train_umnn(cfg: DictConfig, prepared_data: PreparedData) -> UMNNArtifact:
+    model = MonotoneUMNN(len(FEATURES_BASE) - 1, rngs=nnx.Rngs(cfg.seed), width=cfg.width, depth=cfg.depth, n_quad=cfg.n_quad, mlp_residual=cfg.mlp_residual, dropout_rate=cfg.dropout_rate)
+    log.info(f"Total parameters: {get_total_params(model) / 1e6:.2f}M")
+    model = train_model(model, cfg, prepared_data, umnn_loss, name="UMNN")
+
+    umnn_artifact = UMNNArtifact(model, prepared_data.feature_scaler, FEATURES_BASE)
 
     # ------------ test evaluation ----------------
-    umnn_bundle.set_models_to_eval()
+    umnn_artifact.model.eval()
     test_loader = make_loader(
         data=prepared_data.test_data,
         batch_size=cfg.batch_size,
@@ -131,33 +139,18 @@ def train_umnn(cfg: DictConfig, prepared_data: PreparedData) -> UMNNBundle:
         num_workers=cfg.num_workers,
         drop_remainder=True,
     )
-    metrics = compute_metrics(umnn_bundle, test_loader)
+    metrics = compute_metrics(umnn_artifact, test_loader)
     log.info(f"test R2={metrics.r2:.4f}  RMSE={metrics.rmse:.2f}  MAE={metrics.mae:.2f} MSE={metrics.mse:.2f} Bias={metrics.bias:.2f}")
     if cfg.use_wandb:
         wandb.log({"test/r2": metrics.r2, "test/rmse": metrics.rmse, "test/mae": metrics.mae, "test/mse": metrics.mse, "test/bias": metrics.bias})
-    # ------------- checkpointing ----------------
-    # TODO: check checkpointing works okay. and then be able to load the model back in for inference. For now, just save the model states.
-    ckpt_dir = (epath.Path(cfg.checkpoint_dir) / "umnn").resolve()
-    preservation_policy = ocp.training.preservation_policies.LatestN(n=1)
-    with ocp.training.Checkpointer(ckpt_dir, preservation_policy=preservation_policy) as ckptr: # type: ignore[arg-type]
-        ckptr.save_checkpointables(
-            0,
-            {
-                "models": [nnx.state(model) for model in umnn_bundle.models],
-            },
-            overwrite=True
-        )
-    return umnn_bundle
+    return umnn_artifact
 
 def train_rqs(cfg: DictConfig, prepared_data: PreparedData):
-    models = []
-    for ensemble in range(cfg.n_ensembles):
-        model = ConditionalRQS(len(FEATURES_BASE), rngs=nnx.Rngs(cfg.seed + ensemble), width=cfg.width, depth=cfg.depth, n_bins=cfg.n_bins, bounds=cfg.rqs_bounds, residual=cfg.mlp_residual, dropout_rate=cfg.dropout_rate)
-        if ensemble == 0:
-            log.info(f"Total parameters: {get_total_params(model) / 1e6:.2f}M")
-        model = train_model(model, cfg, prepared_data, rqs_loss, use_standardized_y=True)
-        models.append(model)
-    rqs_bundle = RQSBundle(models, prepared_data.feature_scaler, prepared_data.target_scaler, FEATURES_BASE)
+    model = ConditionalRQS(len(FEATURES_BASE), rngs=nnx.Rngs(cfg.seed), width=cfg.width, depth=cfg.depth, n_bins=cfg.n_bins, bounds=cfg.rqs_bounds, residual=cfg.mlp_residual, dropout_rate=cfg.dropout_rate)
+    log.info(f"Total parameters: {get_total_params(model) / 1e6:.2f}M")
+    model = train_model(model, cfg, prepared_data, rqs_loss, name="RQS", use_standardized_y=True)
+
+    rqs_artifact = RQSArtifact(model, prepared_data.feature_scaler, prepared_data.target_scaler, FEATURES_BASE)
 
     # ------------ calibration -------------------
     calib_loader = make_loader(
@@ -170,8 +163,8 @@ def train_rqs(cfg: DictConfig, prepared_data: PreparedData):
     )
     for batch in calib_loader:
         calib_x_raw, calib_y_raw = batch["x_raw"], batch["y_raw"]
-        lower, upper = rqs_bundle.quantile(calib_x_raw, 0.05), rqs_bundle.quantile(calib_x_raw, 0.95)
-        rqs_bundle.conformal[0.10] = conformal_offset(lower, upper, calib_y_raw, alpha=0.10)
+        lower, upper = rqs_artifact.quantile(calib_x_raw, 0.05), rqs_artifact.quantile(calib_x_raw, 0.95)
+        rqs_artifact.conformal[0.10] = conformal_offset(lower, upper, calib_y_raw, alpha=0.10)
 
     # ------------ test evaluation ----------------
     test_loader = make_loader(
@@ -182,7 +175,7 @@ def train_rqs(cfg: DictConfig, prepared_data: PreparedData):
         num_workers=cfg.num_workers,
         drop_remainder=True,
     )
-    metrics = compute_metrics(rqs_bundle, test_loader)
+    metrics = compute_metrics(rqs_artifact, test_loader)
     log.info(f"test R2={metrics.r2:.4f}  RMSE={metrics.rmse:.2f}  MAE={metrics.mae:.2f} MSE={metrics.mse:.2f} Bias={metrics.bias:.2f}")
     if cfg.use_wandb:
         wandb.log({"test/r2": metrics.r2, "test/rmse": metrics.rmse, "test/mae": metrics.mae, "test/mse": metrics.mse, "test/bias": metrics.bias})
@@ -198,8 +191,8 @@ def train_rqs(cfg: DictConfig, prepared_data: PreparedData):
     )
     for batch in test_loader:
         test_x_raw, test_y_raw = batch["x_raw"], batch["y_raw"]
-        raw_lower, raw_upper = rqs_bundle.quantile(test_x_raw, 0.05), rqs_bundle.quantile(test_x_raw, 0.95)
-        conformal_lower, conformal_upper = rqs_bundle.interval(test_x_raw, alpha=0.10)
+        raw_lower, raw_upper = rqs_artifact.quantile(test_x_raw, 0.05), rqs_artifact.quantile(test_x_raw, 0.95)
+        conformal_lower, conformal_upper = rqs_artifact.interval(test_x_raw, alpha=0.10)
 
         coverage_raw = np.mean((test_y_raw >= raw_lower) & (test_y_raw <= raw_upper))
         coverage_conformal = np.mean((test_y_raw >= conformal_lower) & (test_y_raw <= conformal_upper))
@@ -207,19 +200,7 @@ def train_rqs(cfg: DictConfig, prepared_data: PreparedData):
         log.info(f"Conformal 90% interval coverage: {coverage_conformal:.4f}")
         if cfg.use_wandb:
             wandb.log({"test/raw_coverage": coverage_raw, "test/conformal_coverage": coverage_conformal})
-    # ------------ checkpointing ----------------
-    # TODO: check checkpointing works okay. and then be able to load the model back in for inference. For now, just save the model states.
-    ckpt_dir = (epath.Path(cfg.checkpoint_dir) / "rqs").resolve()
-    preservation_policy = ocp.training.preservation_policies.LatestN(n=1)
-    with ocp.training.Checkpointer(ckpt_dir, preservation_policy=preservation_policy) as ckptr: # type: ignore[arg-type]
-        ckptr.save_checkpointables(
-            0,
-            {
-                "models": [nnx.state(model) for model in rqs_bundle.models],
-            },
-            overwrite=True
-        )
-    return rqs_bundle
+    return rqs_artifact
 
 @hydra.main(version_base=None, config_path="conf", config_name="train_config")
 def main(cfg: DictConfig) -> None:
@@ -239,8 +220,8 @@ def main(cfg: DictConfig) -> None:
 
     prepared_data = prepare_data(raw_df, cfg, calib_frac=cfg.calib_frac)
 
-    # umnn_bundle = train_umnn(cfg, prepared_data)
-    models = train_rqs(cfg, prepared_data)
+    umnn_bundle = train_umnn(cfg, prepared_data)
+    rqs_artifact = train_rqs(cfg, prepared_data)
 
     if cfg.use_wandb:
         wandb.finish()

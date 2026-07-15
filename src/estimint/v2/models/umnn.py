@@ -33,18 +33,14 @@ class MonotoneUMNN(nnx.Module):
         return self.bias(c)[:, 0] + self._integral(m, c)
 
 @nnx.jit
-def _forward(models: list[MonotoneUMNN], m: jnp.ndarray, c: jnp.ndarray):
-    return [model(m, c) for model in models]
+def _forward(model: nnx.Module, monotone: jnp.ndarray, context: jnp.ndarray):
+    return model(monotone, context)
 
-class UMNNBundle:
-    def __init__(self, models: list[MonotoneUMNN], scaler: StandardScaler, features: list[str]):
-        self.models = models
+class UMNNArtifact:
+    def __init__(self, model: nnx.Module, scaler: StandardScaler, features: list[str]):
+        self.model = model
         self.scaler = scaler
         self.features = features
-
-    def set_models_to_eval(self):
-        for model in self.models:
-            model.eval()
 
     def _transform_inputs(self, X_raw) -> tuple[jnp.ndarray, jnp.ndarray]:
         X_scaled = self.scaler.transform(X_raw)
@@ -55,9 +51,8 @@ class UMNNBundle:
 
     def predict(self, X_raw: np.ndarray) -> np.ndarray:
         m, c = self._transform_inputs(X_raw)
-        preds = _forward(self.models, m, c)
-        mean_pred = jnp.mean(jnp.stack(preds), axis=0)
-        return np.power(10, mean_pred) # return in original scale
+        pred = _forward(self.model, m, c)
+        return np.power(10, pred) # return in original scale
 
 
 def umnn_loss(model, X, y, w):
