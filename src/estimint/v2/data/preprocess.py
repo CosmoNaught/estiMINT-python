@@ -19,7 +19,7 @@ class PreparedData:
     val_data: list
     test_data: list
     input_size: int
-    scaler: StandardScaler
+    feature_scaler: StandardScaler
     target_scaler: StandardScaler
     calib_data: list = field(default_factory=list)
     train_param_sims: set[tuple[int, int]] = field(default_factory=set)
@@ -411,7 +411,7 @@ def prepare_data(df: pd.DataFrame, cfg: DictConfig, calib_frac: float = 0.0) -> 
         test_data=test_data,
         calib_data=calib_data,
         input_size=len(FEATURES_BASE),
-        scaler=scaler,
+        feature_scaler=scaler,
         target_scaler=target_scaler,
         train_param_sims=split_ps.train,
         val_param_sims=split_ps.val,

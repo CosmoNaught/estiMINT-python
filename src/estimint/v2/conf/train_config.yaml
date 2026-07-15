@@ -4,7 +4,7 @@ num_workers: 0
 use_existing_split: false
 target: "eir"
 stratify: true
-calib_frac: 0.0
+calib_frac: 0.1
 
 # model
 width: 256

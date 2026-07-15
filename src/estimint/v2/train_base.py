@@ -24,7 +24,7 @@ from estimint.utils import r2, rmse, mae, mse
 from estimint.v2.eval.metrics import compute_metrics
 from typing import Callable
 from jaxtyping import Array
-from .models.rqs import ConditionalRQS, rqs_loss
+from .models.rqs import ConditionalRQS, rqs_loss, RQSBundle, conformal_offset
 
 logging.getLogger("absl").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
@@ -118,8 +118,8 @@ def train_umnn(cfg: DictConfig, prepared_data: PreparedData) -> UMNNBundle:
             log.info(f"Total parameters: {get_total_params(model) / 1e6:.2f}M")
         model = train_model(model, cfg, prepared_data, umnn_loss)
         models.append(model)
-        # TODO: unsure if need to ensemble. can probs use dropout instead
-    umnn_bundle = UMNNBundle(models, prepared_data.scaler, FEATURES_BASE)
+        # TODO: unsure if need to ensemble
+    umnn_bundle = UMNNBundle(models, prepared_data.feature_scaler, FEATURES_BASE)
 
     # ------------ test evaluation ----------------
     umnn_bundle.set_models_to_eval()
@@ -157,8 +157,69 @@ def train_rqs(cfg: DictConfig, prepared_data: PreparedData):
             log.info(f"Total parameters: {get_total_params(model) / 1e6:.2f}M")
         model = train_model(model, cfg, prepared_data, rqs_loss, use_standardized_y=True)
         models.append(model)
+    rqs_bundle = RQSBundle(models, prepared_data.feature_scaler, prepared_data.target_scaler, FEATURES_BASE)
 
-    return models
+    # ------------ calibration -------------------
+    calib_loader = make_loader(
+        data=prepared_data.calib_data,
+        batch_size=len(prepared_data.calib_data), # load all at once
+        seed=cfg.seed,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        drop_remainder=True,
+    )
+    for batch in calib_loader:
+        calib_x_raw, calib_y_raw = batch["x_raw"], batch["y_raw"]
+        lower, upper = rqs_bundle.quantile(calib_x_raw, 0.05), rqs_bundle.quantile(calib_x_raw, 0.95)
+        rqs_bundle.conformal[0.10] = conformal_offset(lower, upper, calib_y_raw, alpha=0.10)
+
+    # ------------ test evaluation ----------------
+    test_loader = make_loader(
+        data=prepared_data.test_data,
+        batch_size=cfg.batch_size,
+        seed=cfg.seed,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        drop_remainder=True,
+    )
+    metrics = compute_metrics(rqs_bundle, test_loader)
+    log.info(f"test R2={metrics.r2:.4f}  RMSE={metrics.rmse:.2f}  MAE={metrics.mae:.2f} MSE={metrics.mse:.2f} Bias={metrics.bias:.2f}")
+    if cfg.use_wandb:
+        wandb.log({"test/r2": metrics.r2, "test/rmse": metrics.rmse, "test/mae": metrics.mae, "test/mse": metrics.mse, "test/bias": metrics.bias})
+
+    # confidence interval evaluation
+    test_loader = make_loader(
+        data=prepared_data.test_data,
+        batch_size=len(prepared_data.test_data), # load all at once
+        seed=cfg.seed,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        drop_remainder=True,
+    )
+    for batch in test_loader:
+        test_x_raw, test_y_raw = batch["x_raw"], batch["y_raw"]
+        raw_lower, raw_upper = rqs_bundle.quantile(test_x_raw, 0.05), rqs_bundle.quantile(test_x_raw, 0.95)
+        conformal_lower, conformal_upper = rqs_bundle.interval(test_x_raw, alpha=0.10)
+
+        coverage_raw = np.mean((test_y_raw >= raw_lower) & (test_y_raw <= raw_upper))
+        coverage_conformal = np.mean((test_y_raw >= conformal_lower) & (test_y_raw <= conformal_upper))
+        log.info(f"Raw 90% interval coverage: {coverage_raw:.4f}")
+        log.info(f"Conformal 90% interval coverage: {coverage_conformal:.4f}")
+        if cfg.use_wandb:
+            wandb.log({"test/raw_coverage": coverage_raw, "test/conformal_coverage": coverage_conformal})
+    # ------------ checkpointing ----------------
+    # TODO: check checkpointing works okay. and then be able to load the model back in for inference. For now, just save the model states.
+    ckpt_dir = (epath.Path(cfg.checkpoint_dir) / "rqs").resolve()
+    preservation_policy = ocp.training.preservation_policies.LatestN(n=1)
+    with ocp.training.Checkpointer(ckpt_dir, preservation_policy=preservation_policy) as ckptr: # type: ignore[arg-type]
+        ckptr.save_checkpointables(
+            0,
+            {
+                "models": [nnx.state(model) for model in rqs_bundle.models],
+            },
+            overwrite=True
+        )
+    return rqs_bundle
 
 @hydra.main(version_base=None, config_path="conf", config_name="train_config")
 def main(cfg: DictConfig) -> None:

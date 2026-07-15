@@ -33,8 +33,8 @@ def get_preds_targets(model_bundle, data_loader: DataLoader) -> tuple[np.ndarray
         preds = model_bundle.predict(batch["x_raw"])
         all_preds.append(preds)
         all_targets.append(batch["y_raw"])
-    all_preds = np.concatenate(all_preds, axis=0)
-    all_targets = np.concatenate(all_targets, axis=0)
+    all_preds = np.concat(all_preds, axis=0)
+    all_targets = np.concat(all_targets, axis=0)
 
     return all_preds, all_targets
 

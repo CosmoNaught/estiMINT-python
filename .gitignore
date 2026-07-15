@@ -58,6 +58,6 @@ htmlcov/
 .pytest_cache/
 train_outputs/
 outputs/
-
+*.out
 # Miscellaneous
 slurm.sh

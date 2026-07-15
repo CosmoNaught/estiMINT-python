@@ -44,17 +44,42 @@ def _forward(models: list[ConditionalRQS], context: jnp.ndarray, quantile: float
     return [model.quantile(context, quantile) for model in models]
 
 class RQSBundle:
-    def __init__(self, models: list[ConditionalRQS], scaler_x: StandardScaler, scaler_y: StandardScaler, features: list[str]):
+    def __init__(self, models: list[ConditionalRQS], feature_scaler: StandardScaler, target_scaler: StandardScaler, features: list[str]):
         self.models = models
-        self.scaler_x = scaler_x
-        self.scaler_y = scaler_y
+        self.feature_scaler = feature_scaler
+        self.target_scaler = target_scaler
         self.features = features
         self.conformal = {} # alpha -> offset Q (fit on calibration set)
 
     def _quantile(self, X_raw: np.ndarray, quantile: float) -> np.ndarray:
-        context = jnp.array(self.scaler_x.transform(X_raw))
+        context = jnp.array(self.feature_scaler.transform(X_raw))
         y0 = np.mean(_forward(self.models, context, quantile), axis=0)
-        return np.maximum(0, np.power(10, self.scaler_y.inverse_transform(y0))) # return in original scale
+        return np.maximum(0, np.power(10, self.target_scaler.inverse_transform(y0)))
+
+    def predict(self, X_raw: np.ndarray) -> np.ndarray:
+        return self._quantile(X_raw, 0.5) # median prediction
+
+    def quantile(self, X_raw: np.ndarray, quantile: float) -> np.ndarray:
+        return self._quantile(X_raw, quantile)
+
+    def interval(self, X_raw: np.ndarray, alpha: float = 0.10) -> tuple[np.ndarray, np.ndarray]:
+        """Conformal (1-alpha) band with guaranteed coverage on calibration set. Returns (lower, upper) bounds."""
+        lower = self._quantile(X_raw, alpha / 2)
+        upper  = self._quantile(X_raw, 1 - alpha / 2)
+        Q = self.conformal.get(alpha, 0.0)
+        return np.maximum(0, lower - Q), upper + Q
+
+def conformal_offset(lower: np.ndarray, upper: np.ndarray, y_true: np.ndarray, alpha: float = 0.10) -> float:
+    """Split-conformal (CQR, Romano 2019) width correction on a HELD-OUT split.
+
+    Returns offset Q so that widening to [lo-Q, hi+Q] gives >= (1-alpha)
+    marginal coverage. Fit this on the CALIB split (disjoint from the val split
+    used for early stopping) so the guarantee is honest.
+    """
+    scores = np.maximum(lower - y_true, y_true - upper)
+    n = len(scores)
+    k = np.ceil((n + 1) * (1 - alpha)).astype(int)
+    return float(np.sort(scores)[k - 1])
 
 def rqs_loss(model, X, y0, w):
     """
