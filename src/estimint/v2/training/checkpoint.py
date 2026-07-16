@@ -14,10 +14,13 @@ log = logging.getLogger(__name__)
 logging.getLogger("absl").setLevel(logging.WARNING)
 
 
+def _resolve_checkpoint_dir(checkpoint_dir: str, model_name: str) -> epath.Path:
+    return (epath.Path(checkpoint_dir) / model_name).resolve()
+
 def restore_model(
-    ckptr: ocp.training.Checkpointer,
+    checkpoint_dir: str,
+    model_name: str,
     model: nnx.Module,
-    step: int | None = None,
 ) -> nnx.Module:
     """
     Restore model from checkpoint.
@@ -30,80 +33,23 @@ def restore_model(
     Returns:
         Restored model.
     """
-    loaded = ckptr.load_checkpointables(
-        step,
-        abstract_checkpointables={"model": nnx.state(model)},
-    )
-    nnx.update(model, loaded["model"])
-    return model
-
-
-@dataclass
-class CheckpointSession:
-    ckptr: ocp.training.Checkpointer
-    model: nnx.Module
-    optimizer: nnx.Optimizer
-    start_epoch: int
-    best_val_loss: float
-
-    def save_if_best(self, epoch: int, val_loss: float) -> bool:
-        """
-        Save a checkpoint when validation loss improves.
-
-        Args:
-            epoch: Current epoch.
-            val_loss: Current validation loss.
-
-        Returns:
-            Whether a checkpoint was saved.
-        """
-        if val_loss >= self.best_val_loss:
-            return False
-
-        self.best_val_loss = val_loss
-        self.ckptr.save_checkpointables_async(
-            epoch,
-            {
-                "model": nnx.state(self.model),
-                "optimizer": nnx.state(self.optimizer),
-            },
-            metrics={"val/loss": self.best_val_loss},
-            overwrite=True,
+    ckpt_dir = _resolve_checkpoint_dir(checkpoint_dir, model_name)
+    with ocp.training.Checkpointer(ckpt_dir) as ckptr:
+        loaded = ckptr.load_checkpointables(
+            abstract_checkpointables={"model": nnx.state(model)},
         )
-        return True
+        nnx.update(model, loaded["model"])
+        return model
 
 
-@contextmanager
-def checkpoint_session(
-    checkpoint_dir: str | PathLike[str],
-    max_checkpoints_to_keep: int,
-    model: nnx.Module,
-    optimizer: nnx.Optimizer,
-    restore_checkpoint: bool = False,
-) -> Iterator[CheckpointSession]:
-    """
-    Open a checkpointing session.
-
-    Args:
-        checkpoint_dir: Checkpoint directory.
-        max_checkpoints_to_keep: Number of checkpoints to keep.
-        model: Model to checkpoint.
-        optimizer: Optimizer to checkpoint.
-        restore_checkpoint: Whether to restore existing state.
-
-    Returns:
-        Checkpoint session iterator.
-    """
-    ckpt_dir = epath.Path(checkpoint_dir).resolve()
-    with ocp.training.Checkpointer(
-        ckpt_dir,
-        preservation_policy=ocp.training.preservation_policies.LatestN(max_checkpoints_to_keep),  # type: ignore[arg-type]
-    ) as ckptr:
-        model, optimizer, start_epoch, best_val_loss = init_or_restore_last(ckptr, model, optimizer, restore_checkpoint)
-        yield CheckpointSession(
-            ckptr=ckptr,
-            model=model,
-            optimizer=optimizer,
-            start_epoch=start_epoch,
-            best_val_loss=best_val_loss,
+def save_checkpoint(checkpoint_dir: str, model_name: str, model: nnx.Module):
+    ckpt_dir = _resolve_checkpoint_dir(checkpoint_dir, model_name)
+    preservation_policy = ocp.training.preservation_policies.LatestN(n=1)
+    with ocp.training.Checkpointer(ckpt_dir, preservation_policy=preservation_policy) as ckptr: # type: ignore[arg-type]
+        ckptr.save_checkpointables(
+            0,
+            {
+                "model": nnx.state(model),
+            },
+            overwrite=True
         )

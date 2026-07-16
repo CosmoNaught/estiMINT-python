@@ -9,6 +9,8 @@ import jax.numpy as jnp
 from hydra.utils import get_method
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
+
+from estimint.v2.training.checkpoint import save_checkpoint
 from .models.umnn import MonotoneUMNN, umnn_loss, UMNNArtifact
 from .data.preprocess import PreparedData, prepare_data
 from .data.dataset import make_loader
@@ -108,17 +110,8 @@ def train_model(
                 break
 
     nnx.update(model, best_model)
-    # --------- checkpointing the best model ---------
-    ckpt_dir = (epath.Path(cfg.checkpoint_dir) / name).resolve()
-    preservation_policy = ocp.training.preservation_policies.LatestN(n=1)
-    with ocp.training.Checkpointer(ckpt_dir, preservation_policy=preservation_policy) as ckptr: # type: ignore[arg-type]
-        ckptr.save_checkpointables(
-            0,
-            {
-                "model": nnx.state(model),
-            },
-            overwrite=True
-        )
+    save_checkpoint(cfg.output_dir, name, model)
+
     return model
 
 
@@ -220,7 +213,7 @@ def main(cfg: DictConfig) -> None:
 
     prepared_data = prepare_data(raw_df, cfg, calib_frac=cfg.calib_frac)
 
-    umnn_bundle = train_umnn(cfg, prepared_data)
+    # umnn_bundle = train_umnn(cfg, prepared_data)
     rqs_artifact = train_rqs(cfg, prepared_data)
 
     if cfg.use_wandb:
