@@ -110,7 +110,7 @@ def train_model(
                 break
 
     nnx.update(model, best_model)
-    save_checkpoint(cfg.output_dir, name, model)
+    save_checkpoint(cfg.checkpoint_dir, name, model)
 
     return model
 

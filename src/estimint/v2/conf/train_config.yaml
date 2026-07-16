@@ -16,13 +16,12 @@ n_bins: 24
 rqs_bounds: 6
 
 # Hyperparameters
-num_epochs: 150
+num_epochs: 120
 min_epochs: 100
 patience: 50
 lr: 1e-3
 batch_size: 256
 weight_decay: 1e-4
-n_ensembles: 1
 
 # Checkpoint
 checkpoint_dir: "${output_dir}ckpts-${cur_time}"
