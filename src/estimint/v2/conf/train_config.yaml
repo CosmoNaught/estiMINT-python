@@ -26,7 +26,7 @@ batch_size: 256
 weight_decay: 1e-4
 
 # Checkpoint
-checkpoint_dir: "${output_dir}ckpts-${cur_time}"
+checkpoint_dir: "${output_dir}/ckpts-${cur_time}"
 
 # General
 cur_time: ${now:%Y-%m-%dT%H:%M:%S}
