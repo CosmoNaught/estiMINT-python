@@ -1,6 +1,5 @@
 import numpy as np
 from grain.python import DataLoader
-from jax import Array
 from estimint.utils import mse, r2, rmse, mae, bias
 from dataclasses import dataclass
 

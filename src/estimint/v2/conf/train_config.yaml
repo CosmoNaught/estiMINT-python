@@ -3,7 +3,7 @@ split_file: "datasets/split.csv"
 num_workers: 0
 use_existing_split: false
 target: "eir"
-stratify: true
+stratify: false
 calib_frac: 0.06
 
 # model
