@@ -1,8 +1,20 @@
 import numpy as np
-
+from ..common.types import PredictorType
 # TODO: update to handle eir-> hbr, hbr -> eir (move prev9)
-FEATURES_BASE = ["prev_y9", "dn0_use", "Q0", "phi_bednets", "seasonal", "itn_use", "irs_use"]
-MONOTONIC_FEATURES = ["prev_y9", "hbr_y9"]
+FEATURES_BASE = ["dn0_use", "Q0", "phi_bednets", "seasonal", "itn_use", "irs_use"]
+
+def get_features(predictor: PredictorType) -> list[str]:
+    """
+    Get the list of features based on the predictor and target.
+    The predictor is is inserted at the beginning of the list of features.
+
+    Args:
+        predictor: The predictor type.
+    Returns:
+        A list of feature names.
+    """
+    return [predictor] + FEATURES_BASE
+
 
 class StandardScaler:
     def __init__(self):

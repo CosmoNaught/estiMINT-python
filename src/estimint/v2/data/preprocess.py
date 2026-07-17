@@ -6,7 +6,7 @@ import pandas as pd
 import logging
 from pathlib import Path
 import numpy as np
-from .features import StandardScaler, FEATURES_BASE
+from .features import StandardScaler, get_features
 from estimint.data_processing import make_value_weights
 import pickle
 from dataclasses import dataclass, field
@@ -243,9 +243,9 @@ def _save_split(path, split_ps: SplitParamSims):
     pd.DataFrame(rows, columns=["parameter_index", "simulation_index", "split"]).to_csv(path, index=False)
     log.info(f"Split saved to {path}")
 
-def _fit_scaler(df: pd.DataFrame, train_ps: set[tuple[int, int]], output_dir: str, features: list[str] = FEATURES_BASE) -> StandardScaler:
+def _fit_features_scaler(df: pd.DataFrame, train_ps: set[tuple[int, int]], output_dir: str, features: list[str]) -> StandardScaler:
     """
-    Fit and save the static covariate scaler.
+    Fit and save the static feature scaler.
 
     Args:
         df: Filtered dataframe.
@@ -265,7 +265,7 @@ def _fit_scaler(df: pd.DataFrame, train_ps: set[tuple[int, int]], output_dir: st
     scaler = StandardScaler()
     scaler.fit(train_static)
 
-    save_path = Path(output_dir) / "static_scaler.pkl"
+    save_path = Path(output_dir) / "features_scaler.pkl"
     save_path.parent.mkdir(parents=True, exist_ok=True)
     with open(save_path, "wb") as f:
         pickle.dump(scaler, f)
@@ -304,8 +304,8 @@ def _build_data(
     param_sims: set[tuple[int, int]],
     scaler: StandardScaler,
     target_scaler: StandardScaler,
-    features: list[str] = FEATURES_BASE,
-    target: str = "eir"
+    features: list[str],
+    target
 ) -> list[dict[str, np.ndarray]]:
     """
     Build scaled per-parameter-simulation training records.
@@ -352,19 +352,15 @@ def _build_data(
 
     return data
 
-# TODO: sort out exisitng splits and files with different models etc
+
+
 def prepare_data(df: pd.DataFrame, cfg: DictConfig, calib_frac: float = 0.0) -> PreparedData:
     """
     Split and transform raw simulation data.
 
     Filters out low-signal parameter-simulation pairs, creates or loads the
-    train/val/test split, fits static covariate scaling on the train split only,
+    train/val/test split, fits static feature and target scaling on the train split only,
     and builds per-sequence records for each split.
-
-    Note: each malariasimulation run covers TOTAL_DAYS days: a MODEL_START_DAY's warmup followed by
-    TOTAL_DAYS - MODEL_START_DAY days of actual simulation. Only the latter are used here; the
-    warmup has already been discarded in the input `df` parameter.
-    The intervention is applied at INTERVENTION_DAY.
 
     Args:
         df: Raw simulation dataframe.
@@ -397,21 +393,25 @@ def prepare_data(df: pd.DataFrame, cfg: DictConfig, calib_frac: float = 0.0) -> 
         len(split_ps.test),
     )
 
-    scaler = _fit_scaler(df, split_ps.train, cfg.output_dir) # TODO fix scaling
+    features = get_features(cfg.predictor)
+    features_scaler = _fit_features_scaler(df, split_ps.train, cfg.output_dir, features)
     target_scaler = _fit_target_scaler(df, split_ps.train, cfg.output_dir, target=cfg.target)
 
-    train_data = _build_data(df, split_ps.train, scaler, target_scaler, target=cfg.target)
-    val_data = _build_data(df, split_ps.val, scaler, target_scaler, target=cfg.target)
-    test_data = _build_data(df, split_ps.test, scaler, target_scaler, target=cfg.target)
-    calib_data = _build_data(df, split_ps.calib, scaler, target_scaler, target=cfg.target)
+    def build_data(param_sims):
+        return _build_data(df, param_sims, features_scaler, target_scaler, features, cfg.target)
+
+    train_data = build_data(split_ps.train)
+    val_data = build_data(split_ps.val)
+    test_data = build_data(split_ps.test)
+    calib_data = build_data(split_ps.calib)
 
     return PreparedData(
         train_data=train_data,
         val_data=val_data,
         test_data=test_data,
         calib_data=calib_data,
-        input_size=len(FEATURES_BASE),
-        feature_scaler=scaler,
+        input_size=len(features),
+        feature_scaler=features_scaler,
         target_scaler=target_scaler,
         train_param_sims=split_ps.train,
         val_param_sims=split_ps.val,

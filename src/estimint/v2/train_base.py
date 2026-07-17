@@ -9,20 +9,21 @@ from omegaconf import DictConfig, OmegaConf
 from .data.preprocess import PreparedData, prepare_data
 from .data.dataset import make_loader
 import wandb
-from .data.features import FEATURES_BASE
+from .data.features import get_features
 from flax import nnx
 from .training.train_step import train_model
 import numpy as np
 from estimint.v2.eval.metrics import compute_metrics
-from .models.rqs import ConditionalRQS, rqs_loss, RQSArtifact, conformal_offset
+from .models.rqs import ConditionalRQS, rqs_loss, RQSArtifact
+from .training.calibrate import conformal_offset
 
 log = logging.getLogger(__name__)
 
 def train_rqs(cfg: DictConfig, prepared_data: PreparedData):
-    model = ConditionalRQS(len(FEATURES_BASE), rngs=nnx.Rngs(cfg.seed), width=cfg.width, depth=cfg.depth, n_bins=cfg.n_bins, bounds=cfg.rqs_bounds, residual=cfg.mlp_residual, dropout_rate=cfg.dropout_rate)
+    model = ConditionalRQS.from_cfg(cfg, n_context=len(get_features(cfg.predictor)))
     model = train_model(model, cfg, prepared_data, rqs_loss, name="RQS", use_standardized_y=True)
 
-    rqs_artifact = RQSArtifact(model, prepared_data.feature_scaler, prepared_data.target_scaler, FEATURES_BASE)
+    rqs_artifact = RQSArtifact(model, prepared_data.feature_scaler, prepared_data.target_scaler)
 
     # ------------ calibration -------------------
     calib_loader = make_loader(

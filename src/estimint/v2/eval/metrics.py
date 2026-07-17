@@ -2,6 +2,7 @@ import numpy as np
 from grain.python import DataLoader
 from estimint.utils import mse, r2, rmse, mae, bias
 from dataclasses import dataclass
+from estimint.v2.common.types import ModelArtifact
 
 @dataclass
 class Metrics:
@@ -12,7 +13,7 @@ class Metrics:
     bias: float
 
 def compute_metrics(
-    model_artifact,
+    model_artifact: ModelArtifact,
     loader: DataLoader,
 ):
     preds, targets = get_preds_targets(model_artifact, loader)
@@ -26,7 +27,7 @@ def compute_metrics(
     )
 
 
-def get_preds_targets(model_artifact, data_loader: DataLoader) -> tuple[np.ndarray, np.ndarray]:
+def get_preds_targets(model_artifact: ModelArtifact, data_loader: DataLoader) -> tuple[np.ndarray, np.ndarray]:
     all_preds, all_targets = [], []
     for batch in data_loader:
         preds = model_artifact.predict(batch["x_raw"])

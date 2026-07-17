@@ -59,5 +59,7 @@ htmlcov/
 train_outputs/
 outputs/
 *.out
+test.ipynb
+
 # Miscellaneous
 slurm.sh

@@ -3,9 +3,8 @@ from .mlp import MLP
 import jax.numpy as jnp
 import jax
 from estimint.v2.data.features import StandardScaler
-from estimint.utils import fit_qmap_w, predict_qmap_w, scale_pos
 import numpy as np
-
+from omegaconf import DictConfig
 
 class ConditionalRQS(nnx.Module):
     """Conditional rational-quadratic spline flow.
@@ -13,7 +12,6 @@ class ConditionalRQS(nnx.Module):
     Note: The inverse is flipped as compaerd to standard normalizing flow convention.
     Usually it is as x = T(z) where z ~ N(0, 1). Here, we have defined z = T(x) where z ~ N(0, 1).
     And x = T^{-1}(z)
-
 
     """
     def __init__(self, n_context, *, width=128, depth=4, n_bins=12, bounds=6, residual=False, dropout_rate=0.0, rngs: nnx.Rngs):
@@ -60,21 +58,28 @@ class ConditionalRQS(nnx.Module):
 
         return jax.vmap(_invert)(zs)  # (Q, B)
 
+    @classmethod
+    def from_cfg(cls, cfg: DictConfig, n_context: int) -> "ConditionalRQS":
+        return  cls(
+        n_context,
+        rngs=nnx.Rngs(cfg.seed),
+        width=cfg.width,
+        depth=cfg.depth,
+        n_bins=cfg.n_bins,
+        bounds=cfg.rqs_bounds,
+        residual=cfg.mlp_residual,
+        dropout_rate=cfg.dropout_rate)
+
 @nnx.jit
 def _forward(model: nnx.Module, context: jnp.ndarray, quantile: float):
     return model.quantile(context, quantile) # type: ignore
 
-@nnx.jit
-def _forward_quantiles(model: nnx.Module, context: jnp.ndarray, probs: jnp.ndarray):
-    return model.quantiles(context, probs) # type: ignore
-
 class RQSArtifact:
-    def __init__(self, model: nnx.Module, feature_scaler: StandardScaler, target_scaler: StandardScaler, features: list[str]):
+    def __init__(self, model: nnx.Module, feature_scaler: StandardScaler, target_scaler: StandardScaler):
         self.model = model
         self.feature_scaler = feature_scaler
         self.target_scaler = target_scaler
-        self.features = features
-        self.conformal = {} # alpha -> offset Q
+        self.conformal = dict() # alpha -> offset Q
 
     def _quantile(self, X_raw: np.ndarray, quantile: float) -> np.ndarray:
         context = jnp.array(self.feature_scaler.transform(X_raw))
@@ -94,33 +99,10 @@ class RQSArtifact:
         Q = self.conformal.get(alpha, 0.0)
         return np.maximum(0, lower - Q), upper + Q
 
-def conformal_offset(lower: np.ndarray, upper: np.ndarray, y_true: np.ndarray, alpha: float = 0.10) -> float:
-    """Split-conformal (CQR, Romano 2019) width correction on a HELD-OUT split.
-
-    Returns offset Q so that widening to [lo-Q, hi+Q] gives >= (1-alpha)
-    marginal coverage. Fit this on the CALIB split (disjoint from the val split
-    used for early stopping) so the guarantee is honest.
-    """
-    scores = np.maximum(lower - y_true, y_true - upper)
-    n = len(scores)
-    k = np.ceil((n + 1) * (1 - alpha)).astype(int)
-    return float(np.sort(scores)[k - 1])
-
+# ------------ RQS loss ----------------
 def rqs_loss(model, X, y0, w):
-    """
-    Compute the negative log-likelihood loss for the conditional rational-quadratic spline flow model.
-
-    Args:
-        model: An instance of the ConditionalRQS model.
-        X: Input context data (features).
-        y0: Standardized target data (labels).
-        w: Sample weights for each data point.
-    Returns:
-        The average negative log-likelihood loss, weighted by the sample weights.
-    """
     log_prob = model.log_prob(y0, X)
     return -jnp.sum(w * log_prob) / jnp.sum(w)
-
 
 # ------------ RQS utils ----------------
 def _spline_knots(raw_widths: jax.Array, raw_heights: jax.Array, raw_derivatives: jax.Array, bounds: int, n_points: int):
