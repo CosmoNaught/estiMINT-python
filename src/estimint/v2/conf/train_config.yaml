@@ -1,6 +1,7 @@
-predictor: "prev_y9"
+predictor: "hbr_y9"
 target: "eir"
 name: "${predictor}-${target}"
+
 # data
 data_file: "datasets/estimint_simulations_y9.parquet"
 split_file: "datasets/split_${name}.csv"
@@ -11,7 +12,7 @@ calib_frac: 0.06
 
 # model
 width: 256
-depth: 4
+depth: 2
 mlp_residual: false
 dropout_rate: 0.0
 n_bins: 24

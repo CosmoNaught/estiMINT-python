@@ -42,6 +42,7 @@ output/
 scripts/output/
 *logs/
 wandb/
+.log
 
 # Model training artifacts (regenerable; shipped copies live in src/estimint/data/)
 models/**/*.parquet
@@ -60,6 +61,7 @@ train_outputs/
 outputs/
 *.out
 test.ipynb
+artifacts/
 
 # Miscellaneous
 slurm.sh

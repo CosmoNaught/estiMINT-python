@@ -20,10 +20,11 @@ from .training.calibrate import conformal_offset
 log = logging.getLogger(__name__)
 
 def train_rqs(cfg: DictConfig, prepared_data: PreparedData):
-    model = ConditionalRQS.from_cfg(cfg, n_context=len(get_features(cfg.predictor)))
+    features = get_features(cfg.predictor)
+    model = ConditionalRQS.from_cfg(cfg, n_context=len(features))
     model = train_model(model, cfg, prepared_data, rqs_loss, name="RQS", use_standardized_y=True)
 
-    rqs_artifact = RQSArtifact(model, prepared_data.feature_scaler, prepared_data.target_scaler)
+    rqs_artifact = RQSArtifact(model, prepared_data.feature_scaler, prepared_data.target_scaler, features=features)
 
     # ------------ calibration -------------------
     calib_loader = make_loader(

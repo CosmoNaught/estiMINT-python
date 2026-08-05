@@ -1,0 +1,118 @@
+[2026-08-05 11:18:52,695][__main__][INFO] - predictor: hbr_y9
+target: eir
+name: ${predictor}-${target}
+data_file: datasets/estimint_simulations_y9.parquet
+split_file: datasets/split_${name}.csv
+num_workers: 0
+use_existing_split: false
+stratify: false
+calib_frac: 0.06
+width: 256
+depth: 2
+mlp_residual: false
+dropout_rate: 0.05
+n_bins: 32
+rqs_bounds: 8
+num_epochs: 120
+min_epochs: 120
+patience: 50
+lr: 0.0004012116914909676
+batch_size: 512
+weight_decay: 0.0001
+checkpoint_dir: ${output_dir}/ckpts-${cur_time}
+cur_time: ${now:%Y-%m-%dT%H:%M:%S}
+seed: 42
+use_wandb: true
+output_dir: train_outputs/${name}
+wandb:
+  project: estimint-training-${name}
+  name: train-${cur_time}
+
+[2026-08-05 11:18:53,175][jax._src.xla_bridge][INFO] - Unable to initialize backend 'tpu': INTERNAL: Failed to open libtpu.so: libtpu.so: cannot open shared object file: No such file or directory
+[2026-08-05 11:18:53,329][__main__][INFO] - JAX devices: [CudaDevice(id=0)]
+[2026-08-05 11:18:54,617][estimint.v2.data.preprocess][INFO] - Filtering with prev_threshold 0.01 on prevalence: 12874 valid parameter-simulation pairs out of 16384
+[2026-08-05 11:18:54,634][estimint.v2.data.preprocess][INFO] - Creating new train/val/calib/test split
+[2026-08-05 11:18:54,641][estimint.v2.data.preprocess][INFO] - Saving split to datasets/split_hbr_y9-eir.csv
+[2026-08-05 11:18:54,666][estimint.v2.data.preprocess][INFO] - Split saved to datasets/split_hbr_y9-eir.csv
+[2026-08-05 11:18:54,667][estimint.v2.data.preprocess][INFO] - Split — train: 9009, val: 1543, calib: 775, test: 1547
+[2026-08-05 11:18:59,814][estimint.v2.training.train_step][INFO] - Total parameters: 0.16M
+[2026-08-05 11:19:07,768][__main__][INFO] - predictor: hbr_y9
+target: eir
+name: ${predictor}-${target}
+data_file: datasets/estimint_simulations_y9.parquet
+split_file: datasets/split_${name}.csv
+num_workers: 0
+use_existing_split: false
+stratify: false
+calib_frac: 0.06
+width: 256
+depth: 2
+mlp_residual: true
+dropout_rate: 0.05
+n_bins: 32
+rqs_bounds: 6
+num_epochs: 120
+min_epochs: 120
+patience: 50
+lr: 0.00046407414511213577
+batch_size: 256
+weight_decay: 0.0001
+checkpoint_dir: ${output_dir}/ckpts-${cur_time}
+cur_time: ${now:%Y-%m-%dT%H:%M:%S}
+seed: 42
+use_wandb: true
+output_dir: train_outputs/${name}
+wandb:
+  project: estimint-training-${name}
+  name: train-${cur_time}
+
+[2026-08-05 11:19:08,175][jax._src.xla_bridge][INFO] - Unable to initialize backend 'tpu': INTERNAL: Failed to open libtpu.so: libtpu.so: cannot open shared object file: No such file or directory
+[2026-08-05 11:19:08,320][__main__][INFO] - JAX devices: [CudaDevice(id=0)]
+[2026-08-05 11:19:09,374][estimint.v2.data.preprocess][INFO] - Filtering with prev_threshold 0.01 on prevalence: 12874 valid parameter-simulation pairs out of 16384
+[2026-08-05 11:19:09,390][estimint.v2.data.preprocess][INFO] - Creating new train/val/calib/test split
+[2026-08-05 11:19:09,397][estimint.v2.data.preprocess][INFO] - Saving split to datasets/split_hbr_y9-eir.csv
+[2026-08-05 11:19:09,422][estimint.v2.data.preprocess][INFO] - Split saved to datasets/split_hbr_y9-eir.csv
+[2026-08-05 11:19:09,423][estimint.v2.data.preprocess][INFO] - Split — train: 9009, val: 1543, calib: 775, test: 1547
+[2026-08-05 11:19:14,501][estimint.v2.training.train_step][INFO] - Total parameters: 0.29M
+[2026-08-05 11:22:04,560][__main__][INFO] - test R2=0.9992  RMSE=3.10  MAE=1.18 MSE=9.64 Bias=-0.65
+[2026-08-05 11:22:14,640][__main__][INFO] - Raw 90% interval coverage: 0.9838
+[2026-08-05 11:22:14,640][__main__][INFO] - Conformal 90% interval coverage: 0.9379
+[2026-08-05 11:22:28,865][__main__][INFO] - predictor: hbr_y9
+target: eir
+name: ${predictor}-${target}
+data_file: datasets/estimint_simulations_y9.parquet
+split_file: datasets/split_${name}.csv
+num_workers: 0
+use_existing_split: false
+stratify: false
+calib_frac: 0.06
+width: 512
+depth: 3
+mlp_residual: true
+dropout_rate: 0.1
+n_bins: 24
+rqs_bounds: 6
+num_epochs: 120
+min_epochs: 120
+patience: 50
+lr: 0.00016850712573697677
+batch_size: 512
+weight_decay: 0.0001
+checkpoint_dir: ${output_dir}/ckpts-${cur_time}
+cur_time: ${now:%Y-%m-%dT%H:%M:%S}
+seed: 42
+use_wandb: true
+output_dir: train_outputs/${name}
+wandb:
+  project: estimint-training-${name}
+  name: train-${cur_time}
+
+[2026-08-05 11:22:29,352][jax._src.xla_bridge][INFO] - Unable to initialize backend 'tpu': INTERNAL: Failed to open libtpu.so: libtpu.so: cannot open shared object file: No such file or directory
+[2026-08-05 11:22:29,503][__main__][INFO] - JAX devices: [CudaDevice(id=0)]
+[2026-08-05 11:22:31,176][estimint.v2.data.preprocess][INFO] - Filtering with prev_threshold 0.01 on prevalence: 12874 valid parameter-simulation pairs out of 16384
+[2026-08-05 11:22:31,201][estimint.v2.data.preprocess][INFO] - Creating new train/val/calib/test split
+[2026-08-05 11:22:31,212][estimint.v2.data.preprocess][INFO] - Saving split to datasets/split_hbr_y9-eir.csv
+[2026-08-05 11:22:31,256][estimint.v2.data.preprocess][INFO] - Split saved to datasets/split_hbr_y9-eir.csv
+[2026-08-05 11:22:31,257][estimint.v2.data.preprocess][INFO] - Split — train: 9009, val: 1543, calib: 775, test: 1547
+[2026-08-05 11:22:37,444][estimint.v2.training.train_step][INFO] - Total parameters: 1.62M
+[2026-08-05 11:23:12,446][__main__][INFO] - test R2=0.9987  RMSE=3.89  MAE=1.19 MSE=15.16 Bias=-0.33

@@ -1,9 +1,4 @@
 import logging
-from contextlib import contextmanager
-from dataclasses import dataclass
-from os import PathLike
-from typing import Any, Iterator
-
 import flax.nnx as nnx
 from orbax.checkpoint import v1 as ocp
 from etils import epath

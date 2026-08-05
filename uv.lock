@@ -403,6 +403,7 @@ version = "1.5.4"
 source = { editable = "." }
 dependencies = [
     { name = "flax" },
+    { name = "huggingface-hub" },
     { name = "jax" },
     { name = "jaxtyping" },
     { name = "numpy" },
@@ -468,6 +469,7 @@ requires-dist = [
     { name = "estimint", extras = ["train", "viz", "download", "scenarios"], marker = "extra == 'all'" },
     { name = "flax", specifier = ">=0.12.7" },
     { name = "grain", marker = "extra == 'train'", specifier = ">=0.2.16" },
+    { name = "huggingface-hub", specifier = ">=0.24.0" },
     { name = "hydra-core", marker = "extra == 'train'", specifier = ">=1.3.2" },
     { name = "jax", specifier = ">=0.10.1" },
     { name = "jax", extras = ["cuda12"], marker = "extra == 'gpu'", specifier = ">=0.10.1" },

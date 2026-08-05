@@ -5,6 +5,7 @@ import jax
 from estimint.v2.data.features import StandardScaler
 import numpy as np
 from omegaconf import DictConfig
+from ..common.types import PredictorType
 
 class ConditionalRQS(nnx.Module):
     """Conditional rational-quadratic spline flow.
@@ -62,7 +63,7 @@ class ConditionalRQS(nnx.Module):
     def from_cfg(cls, cfg: DictConfig, n_context: int) -> "ConditionalRQS":
         return  cls(
         n_context,
-        rngs=nnx.Rngs(cfg.seed),
+        rngs=nnx.Rngs(cfg.get("seed", 0)),
         width=cfg.width,
         depth=cfg.depth,
         n_bins=cfg.n_bins,
@@ -70,29 +71,97 @@ class ConditionalRQS(nnx.Module):
         residual=cfg.mlp_residual,
         dropout_rate=cfg.dropout_rate)
 
+    @classmethod
+    def from_pretrained(
+        cls,
+        path_or_repo_id: str,
+        predictor: PredictorType,
+        target: PredictorType,
+        *,
+        revision: str | None = None,
+        cache_dir: str | None = None,
+        local_dir: str | None = None,
+    ) -> "RQSArtifact":
+        """
+        Load a pretrained RQS artifact from a local folder or Hugging Face repo.
+
+        Example usage:
+        ```
+        ConditionalRQS.from_pretrained("dide-ic/estiMINT", predictor="prev_y9", target="eir")
+        ConditionalRQS.from_pretrained("dide-ic/estiMINT", predictor="prev_y9", target="eir", revision="v0.1.0")
+        ```
+
+        Args:
+            path_or_repo_id: Hugging Face repo ID or local folder path.
+            predictor: Predictor type.
+            target: Target type.
+            revision: Optional revision of the model to load from the repo.
+            cache_dir: Optional cache directory for the Hugging Face repo.
+            local_dir: Optional local directory to download the repo into.
+
+        Returns:
+            RQSArtifact containing the restored model and fitted scalers.
+        """
+        from .hub import load_model_artifact
+
+        return load_model_artifact(
+            path_or_repo_id, predictor, target, revision=revision, cache_dir=cache_dir, local_dir=local_dir,
+        )
+
 @nnx.jit
 def _forward(model: nnx.Module, context: jnp.ndarray, quantile: float):
     return model.quantile(context, quantile) # type: ignore
 
+FeatureInput = np.ndarray | dict[str, float] | list[dict[str, float]]
 class RQSArtifact:
-    def __init__(self, model: nnx.Module, feature_scaler: StandardScaler, target_scaler: StandardScaler):
+    def __init__(self, model: nnx.Module, feature_scaler: StandardScaler, target_scaler: StandardScaler, features: list[str]):
         self.model = model
         self.feature_scaler = feature_scaler
         self.target_scaler = target_scaler
         self.conformal = dict() # alpha -> offset Q
+        self.feature_names = features
 
-    def _quantile(self, X_raw: np.ndarray, quantile: float) -> np.ndarray:
-        context = jnp.array(self.feature_scaler.transform(X_raw))
+        if self.feature_scaler.mean_.shape[0] != len(self.feature_names):
+            raise ValueError(f"Feature scaler has {self.feature_scaler.mean_.shape[0]} features, but expected {len(self.feature_names)} features for features {self.feature_names}.")
+
+    def _prepare_inputs(self, X_raw: FeatureInput) -> np.ndarray:
+        """Normalize user input to a (B, C) float32 array in training feature order."""
+        if isinstance(X_raw, dict):
+            X_raw = [X_raw]
+
+        if isinstance(X_raw, list):
+            if not X_raw:
+                raise ValueError("Input list is empty.")
+
+            names = self.feature_names
+            rows = []
+            for i, row in enumerate(X_raw):
+                missing = [f for f in names if f not in row]
+                extra = [f for f in row if f not in names]
+                if missing or extra:
+                    raise KeyError(f"row {i}: missing={missing}, unexpected={extra}. Expected exactly {names}.")
+                rows.append([row[f] for f in names]) # preserve feature order
+            X = np.array(rows, dtype=np.float32)
+        else:
+            X = np.asarray(X_raw, dtype=np.float32)
+            if X.ndim == 1:
+                X = X[None, :] # add batch dimension
+        return X
+
+
+    def _quantile(self, X_raw: FeatureInput, quantile: float) -> np.ndarray:
+        X = self._prepare_inputs(X_raw)
+        context = jnp.array(self.feature_scaler.transform(X))
         y0 = _forward(self.model, context, quantile)
         return np.maximum(0, np.power(10, self.target_scaler.inverse_transform(y0)))
 
-    def predict(self, X_raw: np.ndarray) -> np.ndarray:
+    def predict(self, X_raw: FeatureInput) -> np.ndarray:
         return self._quantile(X_raw, 0.5) # median prediction
 
-    def quantile(self, X_raw: np.ndarray, quantile: float) -> np.ndarray:
+    def quantile(self, X_raw: FeatureInput, quantile: float) -> np.ndarray:
         return self._quantile(X_raw, quantile)
 
-    def interval(self, X_raw: np.ndarray, alpha: float = 0.10) -> tuple[np.ndarray, np.ndarray]:
+    def interval(self, X_raw: FeatureInput, alpha: float = 0.10) -> tuple[np.ndarray, np.ndarray]:
         """Conformal (1-alpha) band with guaranteed coverage on calibration set. Returns (lower, upper) bounds."""
         lower = self._quantile(X_raw, alpha / 2)
         upper  = self._quantile(X_raw, 1 - alpha / 2)

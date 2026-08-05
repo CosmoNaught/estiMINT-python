@@ -1,6 +1,6 @@
 import numpy as np
 from ..common.types import PredictorType
-# TODO: update to handle eir-> hbr, hbr -> eir (move prev9)
+
 FEATURES_BASE = ["dn0_use", "Q0", "phi_bednets", "seasonal", "itn_use", "irs_use"]
 
 def get_features(predictor: PredictorType) -> list[str]:
@@ -26,6 +26,10 @@ class StandardScaler:
         """
         self.mean_: np.ndarray | None = None
         self.scale_: np.ndarray | None = None
+
+    @property
+    def is_fitted(self) -> bool:
+        return self.mean_ is not None and self.scale_ is not None
 
     def fit(self, X: np.ndarray) -> "StandardScaler":
         """
@@ -54,7 +58,7 @@ class StandardScaler:
         Returns:
             Standardized features.
         """
-        if self.mean_ is None or self.scale_ is None:
+        if not self.is_fitted:
             raise ValueError("StandardScaler instance is not fitted yet.")
         return (X - self.mean_) / self.scale_
 
@@ -80,6 +84,6 @@ class StandardScaler:
         Returns:
             Features in the original scale.
         """
-        if self.mean_ is None or self.scale_ is None:
+        if not self.is_fitted:
             raise ValueError("StandardScaler instance is not fitted yet.")
         return X * self.scale_ + self.mean_

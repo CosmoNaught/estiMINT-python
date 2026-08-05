@@ -1,6 +1,6 @@
 predictor: "prev_y9"
 target: "eir"
-name: "{predictor}-{target}"
+name: "${predictor}-${target}"
 
 # Data
 features_scaler_file: train_outputs/${name}/features_scaler.pkl
@@ -8,12 +8,13 @@ target_scaler_file: train_outputs/${name}/target_scaler.pkl
 
 
 # Model - ensure these match the checkpointed model's parameters
+model_name: "RQS"
 width: 256
 depth: 2
 mlp_residual: true
-dropout_rate: 0.0
-n_bins: 32
+n_bins: 24
 rqs_bounds: 6
+dropout_rate: 0.05
 
 # Checkpointing
 checkpoint_dir: ???
