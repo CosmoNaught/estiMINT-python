@@ -42,7 +42,6 @@ output/
 scripts/output/
 *logs/
 wandb/
-.log
 
 # Model training artifacts (regenerable; shipped copies live in src/estimint/data/)
 models/**/*.parquet
