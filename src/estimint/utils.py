@@ -126,6 +126,28 @@ def mae(y: ArrayLike, yhat: ArrayLike) -> float:
     yhat = np.asarray(yhat)
     return np.mean(np.abs(y - yhat))
 
+def medape(y: ArrayLike, yhat: ArrayLike) -> float:
+    """
+    Calculate Median Absolute Percentage Error.
+
+    Equivalent to R's medape() function.
+
+    Parameters
+    ----------
+    y : array-like
+        True values
+    yhat : array-like
+        Predicted values
+
+    Returns
+    -------
+    float
+        Median APE value
+    """
+    y = np.asarray(y)
+    yhat = np.asarray(yhat)
+    return np.median(np.abs((y - yhat) / np.maximum(1, y))) * 100
+
 def bias(y: ArrayLike, yhat: ArrayLike) -> float:
     """
     Calculate bias (mean error).

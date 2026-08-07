@@ -5,9 +5,9 @@ from typing import Any
 import numpy as np
 from huggingface_hub import snapshot_download
 from omegaconf import OmegaConf
-from ..common.types import PredictorType
+from ..common.types import PredictorType, TargetType
 
-from ..data.features import StandardScaler
+from ..data.features import StandardScaler, FeatureScaler
 from .rqs import ConditionalRQS, RQSArtifact
 from ..training.checkpoint import restore_model
 
@@ -17,8 +17,8 @@ def _load_json(path: Path) -> dict[str, Any]:
         return json.load(f)
 
 
-def _load_scaler(mean: list[float], scale: list[float]) -> StandardScaler:
-    scaler = StandardScaler()
+def _load_scaler(mean: list[float], scale: list[float], log_idx: list[int] | None = None) -> StandardScaler:
+    scaler = FeatureScaler(log_idx) if log_idx is not None else StandardScaler()
     scaler.mean_ = np.array(mean, dtype=np.float32)
     scaler.scale_ = np.array(scale, dtype=np.float32)
     return scaler
@@ -45,7 +45,7 @@ def _download_from_hf(
 def load_model_artifact(
     path_or_repo_id: str,
     predictor: PredictorType,
-    target: PredictorType,
+    target: TargetType,
     *,
     revision: str | None = None,
     cache_dir: str | Path | None = None,
@@ -82,7 +82,7 @@ def load_model_artifact(
     model = restore_model(str(artifact_dir / "checkpoint"), config["model_name"], model)
     model.eval()
 
-    feature_scaler = _load_scaler(config["feature_scalar_mean"], config["feature_scalar_scale"])
+    feature_scaler = _load_scaler(config["feature_scalar_mean"], config["feature_scalar_scale"], config["feature_log_idx"])
     target_scaler = _load_scaler(config["target_scalar_mean"], config["target_scalar_scale"])
 
     return RQSArtifact(model=model, feature_scaler=feature_scaler, target_scaler=target_scaler, features=features)

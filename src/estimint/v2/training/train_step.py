@@ -102,7 +102,7 @@ def train_model(
     # ---- training loop ----
     patience_n = 0
     best_val_loss = float("inf")
-    best_model = nnx.state(model)
+    best_state = jax.tree.map(lambda x: x, nnx.state(model))
     epoch_pbar = tqdm(range(cfg.num_epochs), desc="Epoch")
     for epoch in epoch_pbar:
         # remake train loader each epoch to reshuffle with new seed
@@ -129,19 +129,17 @@ def train_model(
             )
         if cfg.use_wandb:
             wandb.log({"train/loss": avg_train_loss, "val/loss": avg_val_loss, "epoch": epoch})
-        if epoch < cfg.min_epochs:
-            continue
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            best_model = nnx.state(model)
+            best_state = jax.tree.map(lambda x: x, nnx.state(model))
             patience_n = 0
         else:
             patience_n += 1
-            if patience_n >= cfg.patience:
+            if epoch >= cfg.min_epochs and patience_n >= cfg.patience:
                 log.info(f"Early stopping at epoch {epoch} with best val loss {best_val_loss:.6f}")
                 break
 
-    nnx.update(model, best_model)
+    nnx.update(model, best_state)
     save_checkpoint(cfg.checkpoint_dir, name, model)
 
     return model

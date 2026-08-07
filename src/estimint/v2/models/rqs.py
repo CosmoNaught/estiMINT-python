@@ -2,10 +2,10 @@ from flax import nnx
 from .mlp import MLP
 import jax.numpy as jnp
 import jax
-from estimint.v2.data.features import StandardScaler
+from estimint.v2.data.features import StandardScaler, FeatureScaler
 import numpy as np
 from omegaconf import DictConfig
-from ..common.types import PredictorType
+from ..common.types import PredictorType, TargetType
 
 class ConditionalRQS(nnx.Module):
     """Conditional rational-quadratic spline flow.
@@ -76,7 +76,7 @@ class ConditionalRQS(nnx.Module):
         cls,
         path_or_repo_id: str,
         predictor: PredictorType,
-        target: PredictorType,
+        target: TargetType,
         *,
         revision: str | None = None,
         cache_dir: str | None = None,
@@ -104,6 +104,7 @@ class ConditionalRQS(nnx.Module):
         """
         from .hub import load_model_artifact
 
+
         return load_model_artifact(
             path_or_repo_id, predictor, target, revision=revision, cache_dir=cache_dir, local_dir=local_dir,
         )
@@ -114,7 +115,7 @@ def _forward(model: nnx.Module, context: jnp.ndarray, quantile: float):
 
 FeatureInput = np.ndarray | dict[str, float] | list[dict[str, float]]
 class RQSArtifact:
-    def __init__(self, model: nnx.Module, feature_scaler: StandardScaler, target_scaler: StandardScaler, features: list[str]):
+    def __init__(self, model: nnx.Module, feature_scaler: FeatureScaler | StandardScaler, target_scaler: StandardScaler, features: list[str]):
         self.model = model
         self.feature_scaler = feature_scaler
         self.target_scaler = target_scaler

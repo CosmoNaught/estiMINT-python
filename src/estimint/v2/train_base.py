@@ -10,7 +10,6 @@ from .data.preprocess import PreparedData, prepare_data
 from .data.dataset import make_loader
 import wandb
 from .data.features import get_features
-from flax import nnx
 from .training.train_step import train_model
 import numpy as np
 from estimint.v2.eval.metrics import compute_metrics
@@ -50,9 +49,9 @@ def train_rqs(cfg: DictConfig, prepared_data: PreparedData):
         drop_remainder=True,
     )
     metrics = compute_metrics(rqs_artifact, test_loader)
-    log.info(f"test R2={metrics.r2:.4f}  RMSE={metrics.rmse:.2f}  MAE={metrics.mae:.2f} MSE={metrics.mse:.2f} Bias={metrics.bias:.2f}")
+    log.info(f"test R2={metrics.r2:.4f}  RMSE={metrics.rmse:.2f}  MAE={metrics.mae:.2f} MSE={metrics.mse:.2f} Bias={metrics.bias:.2f} Median APE={metrics.medape:.2f} Log10 MSE={metrics.log10_mse:.2f}")
     if cfg.use_wandb:
-        wandb.log({"test/r2": metrics.r2, "test/rmse": metrics.rmse, "test/mae": metrics.mae, "test/mse": metrics.mse, "test/bias": metrics.bias})
+        wandb.log({"test/r2": metrics.r2, "test/rmse": metrics.rmse, "test/mae": metrics.mae, "test/mse": metrics.mse, "test/bias": metrics.bias, "test/medape": metrics.medape, "test/log10_mse": metrics.log10_mse})
 
     # confidence interval evaluation
     test_loader = make_loader(

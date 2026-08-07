@@ -1,6 +1,6 @@
 program: estimint/v2/train_base.py
 project: estimint-sweep
-name: sweep-prev-eir
+name: estimint-sweep
 method: bayes
 metric:
   goal: minimize
@@ -40,3 +40,5 @@ command:
   - use_wandb=true
   - num_epochs=120
   - min_epochs=120
+  - predictor=eir
+  - target=hbr_y9

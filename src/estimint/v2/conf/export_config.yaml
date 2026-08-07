@@ -1,4 +1,4 @@
-predictor: "prev_y9"
+predictor: "hbr_y9"
 target: "eir"
 name: "${predictor}-${target}"
 
@@ -12,9 +12,9 @@ model_name: "RQS"
 width: 256
 depth: 2
 mlp_residual: true
-n_bins: 24
+n_bins: 32
 rqs_bounds: 6
-dropout_rate: 0.05
+dropout_rate: 0.0
 
 # Checkpointing
 checkpoint_dir: ???

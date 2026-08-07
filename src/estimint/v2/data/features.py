@@ -2,6 +2,7 @@ import numpy as np
 from ..common.types import PredictorType
 
 FEATURES_BASE = ["dn0_use", "Q0", "phi_bednets", "seasonal", "itn_use", "irs_use"]
+LOG_FEATURES = ("eir", "hbr_y9")
 
 def get_features(predictor: PredictorType) -> list[str]:
     """
@@ -87,3 +88,27 @@ class StandardScaler:
         if not self.is_fitted:
             raise ValueError("StandardScaler instance is not fitted yet.")
         return X * self.scale_ + self.mean_
+
+class FeatureScaler(StandardScaler):
+    """StandardScaler that log10s the features that are in LOG_FEATURES before standardizing them."""
+    def __init__(self, log_idx: list[int] = []):
+        super().__init__()
+        self.log_idx = log_idx
+
+    @classmethod
+    def for_features(cls, features: list[str]) -> "FeatureScaler":
+        return cls([i for i, f in enumerate(features) if f in LOG_FEATURES])
+
+    def _pre(self, X: np.ndarray) -> np.ndarray:
+        if not self.log_idx:
+            return X
+        X = np.array(X, copy=True)
+        X[..., self.log_idx] = np.log10(np.maximum(X[..., self.log_idx], 1e-12))
+        return X
+
+    def fit(self, X: np.ndarray) -> "FeatureScaler":
+        super().fit(self._pre(X))
+        return self
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        return super().transform(self._pre(X))

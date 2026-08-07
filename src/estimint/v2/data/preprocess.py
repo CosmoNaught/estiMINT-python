@@ -6,11 +6,12 @@ import pandas as pd
 import logging
 from pathlib import Path
 import numpy as np
-from .features import StandardScaler, get_features
+from .features import StandardScaler, FeatureScaler, get_features
 from estimint.data_processing import make_value_weights
 import pickle
 from dataclasses import dataclass, field
 from typing import cast
+
 log = logging.getLogger(__name__)
 
 @dataclass
@@ -243,7 +244,7 @@ def _save_split(path, split_ps: SplitParamSims):
     pd.DataFrame(rows, columns=["parameter_index", "simulation_index", "split"]).to_csv(path, index=False)
     log.info(f"Split saved to {path}")
 
-def _fit_features_scaler(df: pd.DataFrame, train_ps: set[tuple[int, int]], output_dir: str, features: list[str]) -> StandardScaler:
+def _fit_features_scaler(df: pd.DataFrame, train_ps: set[tuple[int, int]], output_dir: str, features: list[str]) -> FeatureScaler:
     """
     Fit and save the static feature scaler.
 
@@ -262,7 +263,7 @@ def _fit_features_scaler(df: pd.DataFrame, train_ps: set[tuple[int, int]], outpu
         .drop_duplicates(subset=["_ps"])[features]
         .to_numpy(dtype=np.float32)
     )
-    scaler = StandardScaler()
+    scaler = FeatureScaler.for_features(features)
     scaler.fit(train_static)
 
     save_path = Path(output_dir) / "features_scaler.pkl"
@@ -343,8 +344,8 @@ def _build_data(
                 "x_raw": X_raw,
                 "x": X,
                 "y_raw": Y_raw,
-                "y": Y,
-                "y_std": Y_std,
+                "y": Y, # log10 target
+                "y_std": Y_std, # standardized log10 target
                 "w": W,
                 "ps": np.asarray(ps, dtype=np.int32),  # (2,) parameter_index, simulation_index
             }

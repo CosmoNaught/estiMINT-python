@@ -5,7 +5,7 @@ from omegaconf import DictConfig, OmegaConf
 from pathlib import Path
 from .models.rqs import ConditionalRQS
 from .training.checkpoint import restore_model, save_checkpoint
-from .data.preprocess import StandardScaler, get_features
+from .data.preprocess import StandardScaler, FeatureScaler, get_features
 import json
 
 log = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ def main(cfg: DictConfig):
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     with open(cfg.features_scaler_file, "rb") as f:
-        feature_scaler: StandardScaler = pickle.load(f)
+        feature_scaler: FeatureScaler = pickle.load(f)
     with open(cfg.target_scaler_file, "rb") as f:
         target_scaler: StandardScaler = pickle.load(f)
     if not feature_scaler.is_fitted or not target_scaler.is_fitted:
@@ -49,12 +49,15 @@ def main(cfg: DictConfig):
         features=features,
         feature_scalar_mean=feature_scaler.mean_.tolist(),
         feature_scalar_scale=feature_scaler.scale_.tolist(),
+        feature_log_idx=list(feature_scaler.log_idx),
         target_scalar_mean=target_scaler.mean_.tolist(),
         target_scalar_scale=target_scaler.scale_.tolist(),
     )
 
     with (artifact_dir / "config.json").open("w") as f:
         json.dump(config, f, indent=2)
+
+    log.info(f"Exported model and config to {artifact_dir}")
 
 
 if __name__ == "__main__":
