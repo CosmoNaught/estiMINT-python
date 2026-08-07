@@ -29,6 +29,8 @@ def main(cfg: DictConfig):
     if not feature_scaler.is_fitted or not target_scaler.is_fitted:
         raise ValueError("Feature or target scaler is not fitted. Please fit the scalers before exporting the model.")
 
+    with open(cfg.conformal_file, "r") as f:
+        conformal = json.load(f)
     features = get_features(cfg.predictor)
     model = ConditionalRQS.from_cfg(cfg, n_context=len(features))
     model = restore_model(cfg.checkpoint_dir, cfg.model_name, model)
@@ -52,6 +54,7 @@ def main(cfg: DictConfig):
         feature_log_idx=list(feature_scaler.log_idx),
         target_scalar_mean=target_scaler.mean_.tolist(),
         target_scalar_scale=target_scaler.scale_.tolist(),
+        conformal=conformal,
     )
 
     with (artifact_dir / "config.json").open("w") as f:

@@ -84,6 +84,7 @@ def load_model_artifact(
 
     feature_scaler = _load_scaler(config["feature_scalar_mean"], config["feature_scalar_scale"], config["feature_log_idx"])
     target_scaler = _load_scaler(config["target_scalar_mean"], config["target_scalar_scale"])
+    conformal = {float(k): v for k, v in config.get("conformal", {}).items()}
 
-    return RQSArtifact(model=model, feature_scaler=feature_scaler, target_scaler=target_scaler, features=features)
+    return RQSArtifact(model=model, feature_scaler=feature_scaler, target_scaler=target_scaler, features=features, conformal=conformal)
 

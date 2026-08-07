@@ -15,6 +15,7 @@ import numpy as np
 from estimint.v2.eval.metrics import compute_metrics
 from .models.rqs import ConditionalRQS, rqs_loss, RQSArtifact
 from .training.calibrate import conformal_offset
+import json
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +39,11 @@ def train_rqs(cfg: DictConfig, prepared_data: PreparedData):
         calib_x_raw, calib_y_raw = batch["x_raw"], batch["y_raw"]
         lower, upper = rqs_artifact.quantile(calib_x_raw, 0.05), rqs_artifact.quantile(calib_x_raw, 0.95)
         rqs_artifact.conformal[0.10] = conformal_offset(lower, upper, calib_y_raw, alpha=0.10)
+
+        with open(cfg.conformal_file, "w") as f:
+            json.dump(rqs_artifact.conformal, f, indent=2)
+        log.info(f"Saved conformal offsets to {cfg.conformal_file}")
+
 
     # ------------ test evaluation ----------------
     test_loader = make_loader(

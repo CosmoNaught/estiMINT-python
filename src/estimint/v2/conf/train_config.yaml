@@ -17,6 +17,7 @@ mlp_residual: false
 dropout_rate: 0.0
 n_bins: 24
 rqs_bounds: 6
+conformal_file: "${output_dir}/conformal-${cur_time}.json"
 
 # Hyperparameters
 num_epochs: 120
