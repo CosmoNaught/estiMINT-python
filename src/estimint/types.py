@@ -1,5 +1,7 @@
-from typing import Literal
+from typing import Any, Literal, Dict
 from dataclasses import dataclass
+
+from estimint.v2.models.hub import repo_id
 
 Input_Mode = Literal["prevalence", "eir", "hbr"]
 
@@ -29,3 +31,17 @@ class Scenario:
     irs_future: float = 0.0
     routine: float = 0.0
     lsm: float = 0.0
+
+@dataclass
+class PreparedScenario:
+    eir_target: EirTarget
+    mosquito_density_change: float
+    eir_model_features: Dict[str, float]
+    summary_values: dict[str, Any]
+    emulator_covariates: dict[str, float]
+
+INPUT_MODE_TO_REPO_IDS: Dict[Input_Mode, str] = {
+    "prevalence": repo_id("prev_y9", "eir"),
+    "hbr": repo_id("hbr_y9", "eir"),
+    "eir": repo_id("eir", "hbr_y9"),
+}

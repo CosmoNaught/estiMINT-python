@@ -12,6 +12,9 @@ from .rqs import ConditionalRQS, RQSArtifact
 from ..training.checkpoint import restore_model
 
 
+def repo_id(predictor: PredictorType, target: TargetType) -> str:
+    return f"{predictor}-{target}"
+
 def _load_json(path: Path) -> dict[str, Any]:
     with path.open("r") as f:
         return json.load(f)
@@ -72,7 +75,7 @@ def load_model_artifact(
         artifact_dir = Path(path_or_repo_id)
     else:
         artifact_dir = _download_from_hf(
-            path_or_repo_id, f"{predictor}-{target}", revision=revision, cache_dir=cache_dir, local_dir=local_dir
+            path_or_repo_id, repo_id(predictor, target), revision=revision, cache_dir=cache_dir, local_dir=local_dir
         )
 
     config = _load_json(artifact_dir / "config.json")

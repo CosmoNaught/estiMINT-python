@@ -10,15 +10,12 @@ Pipeline:
 4. HBR model predicts EIR at both HBR values      (ratio approach)
 5. EIR_new = EIR_baseline * (EIR_scaled / EIR_roundtrip)
 """
-
-from typing import Any
-
-import pandas as pd
-
-from .run import run_xgb_model
+import numpy as np
+from estimint.types import PreparedScenario, INPUT_MODE_TO_REPO_IDS
+from estimint.v2.models.rqs import RQSArtifact
 
 
-def estimate_eir_with_mosquito_delta(inputs: pd.DataFrame, *, models: dict[str, Any]) -> pd.DataFrame:
+def estimate_eir_with_mosquito_delta(prepared_scenarios: list[PreparedScenario], *, eir_models: dict[str, RQSArtifact]) -> list[dict[str, float]]:
     """
     Estimate new EIR after a change in mosquito density for multiple scenarios.
 
@@ -68,53 +65,62 @@ def estimate_eir_with_mosquito_delta(inputs: pd.DataFrame, *, models: dict[str, 
     >>> result = estimate_eir_with_mosquito_delta(inputs, models=models)
     >>> print(result[["eir_baseline", "eir_new"]])
     """
-    features = [
-        "dn0_use",
-        "Q0",
-        "phi_bednets",
-        "seasonal",
-        "itn_use",
-        "irs_use",
-    ]
-    intervention_data = inputs[features]
-
     # Step 1: prevalence -> EIR baseline
-    prevalence_data = intervention_data.assign(prev_y9=inputs["prevalence"].to_numpy())
-    eir_baseline = run_xgb_model(prevalence_data, models["prevalence"])
+    prev_eir_artifact = eir_models[INPUT_MODE_TO_REPO_IDS["prevalence"]]
+    prev_eir_records = [
+        {
+            **prepared_scenario.eir_model_features,
+            "prev_y9": prepared_scenario.eir_target.input_value,
+        }
+        for prepared_scenario in prepared_scenarios
+    ]
+    eir_baselines = prev_eir_artifact.predict(prev_eir_records)
 
-    # Step 2: EIR -> HBR baseline
-    eir_data = intervention_data.assign(eir=eir_baseline)
-    hbr_baseline = run_xgb_model(eir_data, models["eir_to_hbr"])
+    # 2: EIR -> HBR baseline
+    eir_hbr_artifact = eir_models[INPUT_MODE_TO_REPO_IDS["eir"]]
+    eir_hbr_records = [
+        {
+            **prepared_scenario.eir_model_features,
+            "eir": eir_value,
+        }
+        for prepared_scenario, eir_value in zip(prepared_scenarios, eir_baselines)
+    ]
+    hbr_baselines = eir_hbr_artifact.predict(eir_hbr_records)
 
     # Step 3: apply mosquito delta (positive or negative)
-    hbr_new = hbr_baseline * (1 + inputs["mosquito_delta"].to_numpy())
+    mosquito_deltas = [prepared_scenario.mosquito_density_change for prepared_scenario in prepared_scenarios]
+    hbr_adjusted = hbr_baselines * (1 + np.array(mosquito_deltas))
 
     # Step 4: ratio approach — batch both HBR values in one call so they
     # share the same smooth PCHIP curve
-    hbr_data = pd.concat(
-        [
-            intervention_data.assign(hbr_y9=hbr_baseline),
-            intervention_data.assign(hbr_y9=hbr_new),
-        ],
-        ignore_index=True,
-    )
-    eir_from_hbr = run_xgb_model(hbr_data, models["hbr"])
+    hbr_eir_artifact = eir_models[INPUT_MODE_TO_REPO_IDS["hbr"]]
+    hbr_eir_records = [
+        {
+            **prepared_scenario.eir_model_features,
+            "hbr_y9": hbr_value,
+        }
+        for hbr_values in (hbr_baselines, hbr_adjusted)
+        for prepared_scenario, hbr_value in zip(prepared_scenarios, hbr_values)
+    ]
+    eir_from_hbr = hbr_eir_artifact.predict(hbr_eir_records)
 
-    count = len(inputs)
+    count = len(prepared_scenarios)
     eir_rt = eir_from_hbr[:count]
     eir_new_raw = eir_from_hbr[count:]
 
     # Step 5: multiplier applied to clean baseline
     multiplier = eir_new_raw / eir_rt
-    eir_new = eir_baseline * multiplier
+    eir_new = eir_baselines * multiplier
 
-    return pd.DataFrame(
+    return [
         {
             "eir_baseline": eir_baseline,
             "eir_new": eir_new,
             "eir_multiplier": multiplier,
             "hbr_baseline": hbr_baseline,
-            "hbr_new": hbr_new,
-        },
-        index=inputs.index,
-    )
+            "hbr_new": hbr_adjusted,
+        }
+        for  eir_baseline, eir_new, multiplier, hbr_baseline, hbr_adjusted in zip(
+            eir_baselines, eir_new, multiplier, hbr_baselines, hbr_adjusted
+        )
+    ]

@@ -40,7 +40,7 @@ class TestMosquitoDelta:
 
     def _run(self, models, delta):
         inputs = pd.DataFrame([{"prevalence": 0.30, "mosquito_delta": delta, **INTERVENTIONS}])
-        return estimate_eir_with_mosquito_delta(inputs, models=models).iloc[0]
+        return estimate_eir_with_mosquito_delta(inputs, eir_models=models).iloc[0]
 
     def test_returns_expected_columns(self, models):
         res = self._run(models, 0.25)
@@ -68,6 +68,6 @@ class TestMosquitoDelta:
         # a single batched call handles every row and preserves input order
         deltas = [-0.5, -0.25, 0.0, 0.25, 0.5, 1.0]
         inputs = pd.DataFrame([{"prevalence": 0.30, "mosquito_delta": d, **INTERVENTIONS} for d in deltas])
-        res = estimate_eir_with_mosquito_delta(inputs, models=models)
+        res = estimate_eir_with_mosquito_delta(inputs, eir_models=models)
         assert list(res.index) == list(range(len(deltas)))
         assert list(res["eir_new"]) == sorted(res["eir_new"])
