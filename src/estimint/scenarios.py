@@ -34,7 +34,6 @@ _NET_KEYS = (
 )
 
 
-# TODO: need to update all docs and type hints etc. readme as well
 ######################## Internal helpers  ########################
 
 def _load_emulators(hf_repo: str) -> dict[str, Any]:

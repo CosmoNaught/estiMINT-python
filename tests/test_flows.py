@@ -5,12 +5,9 @@ so it runs offline. The mosquito-delta pipeline uses the published RQS models, w
 are downloaded (and then cached) from the estiMINT HuggingFace repo.
 """
 
-import pandas as pd
 import pytest
 
 from estimint import (
-    load_xgb_model,
-    run_xgb_model,
     estimate_eir_with_mosquito_delta,
 )
 from estimint.eir_models import load_eir_models
@@ -20,22 +17,6 @@ INTERVENTIONS = dict(
     dn0_use=0.33, Q0=0.87, phi_bednets=0.82,
     seasonal=0.0, itn_use=0.6, irs_use=0.0,
 )
-
-
-class TestPrevalenceToEir:
-    def test_predicts_positive_eir(self):
-        model = load_xgb_model("prevalence")
-        X = pd.DataFrame({"prev_y9": [0.30], **{k: [v] for k, v in INTERVENTIONS.items()}})
-        eir = run_xgb_model(X, model)
-        assert len(eir) == 1
-        assert eir[0] > 0
-
-    def test_higher_prevalence_gives_higher_eir(self):
-        model = load_xgb_model("prevalence")
-        rows = {"prev_y9": [0.10, 0.50], **{k: [v, v] for k, v in INTERVENTIONS.items()}}
-        eir = run_xgb_model(pd.DataFrame(rows), model)
-        assert eir[1] > eir[0]
-
 
 def _prepared(delta: float, prevalence: float = 0.30) -> PreparedScenario:
     """A prevalence-input scenario carrying a mosquito-density change."""

@@ -6,8 +6,7 @@ Equivalent to: utils.R
 
 import sys
 from datetime import datetime
-from typing import Optional, Dict, Any, Union
-from pathlib import Path
+from typing import  Dict, Any
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -420,92 +419,3 @@ def scale_pos(obs: ArrayLike, pred: ArrayLike) -> float:
     if not np.isfinite(a) or a <= 0:
         a = 1.0
     return a
-
-
-def _find_installed_model() -> Optional[str]:
-    """
-    Find model file installed with package.
-
-    Equivalent to R's .find_installed_model() function.
-
-    Returns
-    -------
-    str or None
-        Path to model file if found, None otherwise
-    """
-    import importlib.resources as pkg_resources
-
-    try:
-        # Try different possible locations
-        candidates = []
-
-        # Check package data directories
-        try:
-            with pkg_resources.files("estimint") as pkg_path:
-                candidates.extend([
-                    pkg_path / "extdata" / "eir_model" / "estiMINT_model.pkl",
-                    pkg_path / "extdata" / "estiMINT_model.pkl",
-                    pkg_path / "estiMINT_model.pkl",
-                ])
-        except (TypeError, AttributeError):
-            pass
-
-        for cand in candidates:
-            if hasattr(cand, 'is_file') and cand.is_file():
-                return str(cand)
-            elif isinstance(cand, (str, Path)) and Path(cand).exists():
-                return str(cand)
-
-    except Exception:
-        pass
-
-    return None
-
-
-def _resolve_model_file(dir_or_file: Union[str, Path]) -> str:
-    """
-    Resolve model file from directory or file path.
-
-    Equivalent to R's .resolve_model_file() function.
-
-    Parameters
-    ----------
-    dir_or_file : str or Path
-        Path to directory or file
-
-    Returns
-    -------
-    str
-        Path to model file
-
-    Raises
-    ------
-    FileNotFoundError
-        If model file cannot be found
-    """
-    path = Path(dir_or_file)
-
-    # If it's a file that exists, return it
-    if path.is_file():
-        return str(path)
-
-    # Must be a directory
-    if not path.is_dir():
-        raise FileNotFoundError(f"Path does not exist: {dir_or_file}")
-
-    # Try candidate locations
-    candidates = [
-        path / "estiMINT_model.pkl",
-        path / "eir_model" / "estiMINT_model.pkl",
-    ]
-
-    for cand in candidates:
-        if cand.is_file():
-            return str(cand)
-
-    # Search recursively for .pkl files
-    hits = list(path.rglob("estiMINT_model.pkl"))
-    if hits:
-        return str(hits[0])
-
-    raise FileNotFoundError(f"Could not find 'estiMINT_model.pkl' under: {dir_or_file}")
