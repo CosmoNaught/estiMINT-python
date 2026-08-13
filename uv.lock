@@ -399,7 +399,7 @@ wheels = [
 
 [[package]]
 name = "estimint"
-version = "1.5.4"
+version = "1.6.4"
 source = { editable = "." }
 dependencies = [
     { name = "flax" },
@@ -421,6 +421,7 @@ all = [
     { name = "duckdb" },
     { name = "grain" },
     { name = "hydra-core" },
+    { name = "jax", extra = ["cuda12"] },
     { name = "matplotlib" },
     { name = "mintstate" },
     { name = "optax" },
@@ -466,7 +467,7 @@ dev = [
 requires-dist = [
     { name = "appdirs", marker = "extra == 'download'", specifier = ">=1.4.0" },
     { name = "duckdb", marker = "extra == 'train'", specifier = ">=0.8.0" },
-    { name = "estimint", extras = ["train", "viz", "download", "scenarios"], marker = "extra == 'all'" },
+    { name = "estimint", extras = ["train", "viz", "download", "scenarios", "gpu"], marker = "extra == 'all'" },
     { name = "flax", specifier = ">=0.12.7" },
     { name = "grain", marker = "extra == 'train'", specifier = ">=0.2.16" },
     { name = "huggingface-hub", specifier = ">=0.24.0" },

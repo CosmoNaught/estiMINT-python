@@ -4,123 +4,96 @@ Human Biting Rate (HBR) pipeline for estiMINT.
 Answers the question: "What happens to EIR if mosquito density changes by X%?"
 
 Pipeline:
-1. prev_y9 + interventions -> EIR_baseline       (prevalence model)
-2. EIR_baseline + interventions -> HBR_baseline   (EIR-to-HBR model)
-3. HBR_new = HBR_baseline * (1 + mosquito_delta)  (user's mosquito change, pos or neg)
-4. HBR model predicts EIR at both HBR values      (ratio approach)
-5. EIR_new = EIR_baseline * (EIR_scaled / EIR_roundtrip)
+1. prev_y9 + interventions -> EIR_baseline         (prev_y9 -> eir model)
+2. EIR_baseline + interventions -> HBR_baseline    (eir -> hbr_y9 model)
+3. HBR_new = HBR_baseline * (1 + mosquito_delta)   (user's mosquito change, pos or neg)
+4. EIR predicted at both HBR values                (hbr_y9 -> eir model)
+5. EIR_new = EIR_baseline * (EIR_new_raw / EIR_roundtrip)
+
+Step 5 applies the *ratio* of the two step-4 predictions rather than using EIR_new_raw
+directly, so the result stays anchored to the cleaner step-1 baseline and any bias in
+the EIR -> HBR -> EIR round trip cancels out.
 """
+
 import numpy as np
-from estimint.types import PreparedScenario, INPUT_MODE_TO_REPO_IDS
-from estimint.v2.models.rqs import RQSArtifact
+
+from .eir_models import EirModels, predict_from_measurements
+from .types import PreparedScenario
 
 
-def estimate_eir_with_mosquito_delta(prepared_scenarios: list[PreparedScenario], *, eir_models: dict[str, RQSArtifact]) -> list[dict[str, float]]:
+def estimate_eir_with_mosquito_delta(
+    prepared_scenarios: list[PreparedScenario], *, eir_models: EirModels
+) -> list[dict[str, float]]:
     """
-    Estimate new EIR after a change in mosquito density for multiple scenarios.
-
-    The HBR model predicts EIR at both the
-    baseline and scaled HBR, then applies the relative multiplier to the clean
-    baseline EIR from the prevalence model.
+    Estimate the new EIR after a change in mosquito density, for a batch of scenarios.
 
     Parameters
     ----------
-    inputs : pd.DataFrame
-        One row per scenario. Required columns:
+    prepared_scenarios : list[PreparedScenario]
+        Scenarios with ``input_mode == "prevalence"``. Each supplies:
 
-        - ``prevalence`` : baseline malaria prevalence (prev_y9), e.g. 0.30 for 30%.
-        - ``mosquito_delta`` : fractional change in mosquito density, e.g. 0.10
-          for +10%, -0.50 for -50%. Must be > -1 per row.
-        - ``dn0_use`` : bednet contact reduction parameter.
-        - ``Q0`` : human blood index.
-        - ``phi_bednets`` : proportion of bites on humans while in bed.
-        - ``seasonal`` : seasonality flag (0.0 or 1.0).
-        - ``itn_use`` : ITN coverage (0-1).
-        - ``irs_use`` : IRS coverage (0-1).
+        - ``eir_target.input_value`` : baseline malaria prevalence (prev_y9), e.g. 0.30 for 30%.
+        - ``mosquito_density_change`` : fractional change in mosquito density, e.g. 0.10
+          for +10%, -0.50 for -50%. Must be > -1.
+        - ``eir_model_features`` : the intervention covariates shared by all three models
+          (``dn0_use``, ``Q0``, ``phi_bednets``, ``seasonal``, ``itn_use``, ``irs_use``).
 
-    models : dict
-        Pre-loaded model dictionary with keys ``"prevalence"``, ``"hbr"``,
-        and ``"eir_to_hbr"``.
+    eir_models : EirModels
+        Artifacts from :func:`estimint.eir_models.load_eir_models`.
 
     Returns
     -------
-    pd.DataFrame
-        Same index as *inputs*, with columns:
+    list[dict[str, float]]
+        One entry per scenario, in input order, with keys:
 
         - ``eir_baseline`` : baseline EIR from prevalence.
-        - ``eir_new`` : new EIR after mosquito density change.
+        - ``eir_new`` : new EIR after the mosquito density change.
         - ``eir_multiplier`` : ratio of new EIR to baseline.
         - ``hbr_baseline`` : estimated baseline HBR.
-        - ``hbr_new`` : HBR after mosquito density change.
+        - ``hbr_new`` : HBR after the mosquito density change.
 
     Examples
     --------
-    >>> import pandas as pd
-    >>> from estimint import estimate_eir_with_mosquito_delta
-    >>> inputs = pd.DataFrame([
-    ...     {"prevalence": 0.30, "mosquito_delta": 0.25,
-    ...      "dn0_use": 0.33, "Q0": 0.87, "phi_bednets": 0.82,
-    ...      "seasonal": 0.0, "itn_use": 0.6, "irs_use": 0.0},
-    ... ])
-    >>> result = estimate_eir_with_mosquito_delta(inputs, models=models)
-    >>> print(result[["eir_baseline", "eir_new"]])
+    >>> from estimint.eir_models import load_eir_models
+    >>> from estimint.hbr import estimate_eir_with_mosquito_delta
+    >>> results = estimate_eir_with_mosquito_delta(prepared_scenarios, eir_models=load_eir_models())
+    >>> results[0]["eir_new"]
     """
     # Step 1: prevalence -> EIR baseline
-    prev_eir_artifact = eir_models[INPUT_MODE_TO_REPO_IDS["prevalence"]]
-    prev_eir_records = [
-        {
-            **prepared_scenario.eir_model_features,
-            "prev_y9": prepared_scenario.eir_target.input_value,
-        }
-        for prepared_scenario in prepared_scenarios
-    ]
-    eir_baselines = prev_eir_artifact.predict(prev_eir_records)
+    prevalences = [prepared_scenario.eir_target.input_value for prepared_scenario in prepared_scenarios]
+    eir_baselines = predict_from_measurements(eir_models, "prev_y9", prepared_scenarios, prevalences)
 
-    # 2: EIR -> HBR baseline
-    eir_hbr_artifact = eir_models[INPUT_MODE_TO_REPO_IDS["eir"]]
-    eir_hbr_records = [
-        {
-            **prepared_scenario.eir_model_features,
-            "eir": eir_value,
-        }
-        for prepared_scenario, eir_value in zip(prepared_scenarios, eir_baselines)
-    ]
-    hbr_baselines = eir_hbr_artifact.predict(eir_hbr_records)
+    # Step 2: EIR -> HBR baseline
+    hbr_baselines = predict_from_measurements(eir_models, "eir", prepared_scenarios, eir_baselines)
 
     # Step 3: apply mosquito delta (positive or negative)
-    mosquito_deltas = [prepared_scenario.mosquito_density_change for prepared_scenario in prepared_scenarios]
-    hbr_adjusted = hbr_baselines * (1 + np.array(mosquito_deltas))
+    mosquito_deltas = np.array(
+        [prepared_scenario.mosquito_density_change for prepared_scenario in prepared_scenarios]
+    )
+    hbr_new = hbr_baselines * (1 + mosquito_deltas)
 
-    # Step 4: ratio approach — batch both HBR values in one call so they
-    # share the same smooth PCHIP curve
-    hbr_eir_artifact = eir_models[INPUT_MODE_TO_REPO_IDS["hbr"]]
-    hbr_eir_records = [
-        {
-            **prepared_scenario.eir_model_features,
-            "hbr_y9": hbr_value,
-        }
-        for hbr_values in (hbr_baselines, hbr_adjusted)
-        for prepared_scenario, hbr_value in zip(prepared_scenarios, hbr_values)
-    ]
-    eir_from_hbr = hbr_eir_artifact.predict(hbr_eir_records)
+    # Step 4: both HBR values go back through the HBR -> EIR model in one batched call
+    eir_from_hbr = predict_from_measurements(
+        eir_models,
+        "hbr_y9",
+        [*prepared_scenarios, *prepared_scenarios],
+        np.concatenate([hbr_baselines, hbr_new]),
+    )
+    eir_roundtrip, eir_new_raw = np.split(eir_from_hbr, 2)
 
-    count = len(prepared_scenarios)
-    eir_rt = eir_from_hbr[:count]
-    eir_new_raw = eir_from_hbr[count:]
-
-    # Step 5: multiplier applied to clean baseline
-    multiplier = eir_new_raw / eir_rt
-    eir_new = eir_baselines * multiplier
+    # Step 5: multiplier applied to the clean baseline
+    eir_multipliers = eir_new_raw / eir_roundtrip
+    eir_news = eir_baselines * eir_multipliers
 
     return [
         {
-            "eir_baseline": eir_baseline,
-            "eir_new": eir_new,
-            "eir_multiplier": multiplier,
-            "hbr_baseline": hbr_baseline,
-            "hbr_new": hbr_adjusted,
+            "eir_baseline": float(eir_baseline),
+            "eir_new": float(eir_new),
+            "eir_multiplier": float(eir_multiplier),
+            "hbr_baseline": float(hbr_baseline),
+            "hbr_new": float(hbr_adjusted),
         }
-        for  eir_baseline, eir_new, multiplier, hbr_baseline, hbr_adjusted in zip(
-            eir_baselines, eir_new, multiplier, hbr_baselines, hbr_adjusted
+        for eir_baseline, eir_new, eir_multiplier, hbr_baseline, hbr_adjusted in zip(
+            eir_baselines, eir_news, eir_multipliers, hbr_baselines, hbr_new, strict=True
         )
     ]

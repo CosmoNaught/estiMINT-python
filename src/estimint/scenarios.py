@@ -1,29 +1,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from estimint.v2.common.types import TargetType, PredictorType
-
 from .bednet import DN0Result, calculate_dn0
+from .eir_models import (
+    ESTIMINT_HF_REPO,
+    INPUT_MODE_TO_PREDICTOR,
+    EirModels,
+    load_eir_models,
+    predict_from_measurements,
+)
 from .hbr import estimate_eir_with_mosquito_delta
-from estimint.v2.models.rqs import ConditionalRQS, RQSArtifact
-from estimint.v2.models.hub import repo_id
-from .types import  Scenario, Input_Mode, PreparedScenario, INPUT_MODE_TO_REPO_IDS
+from .types import Input_Mode, PreparedScenario, Scenario
 from collections import defaultdict
 
 ####################### Constants and global storage ###################
 STATEMINT_HF_REPO = "dide-ic/stateMINT"
-ESTIMINT_HF_REPO = "dide-ic/estiMINT"
 # 157 windows of 14 days from day 2190; intervention at day 3285.
 _ABS_TIME = 2190 + 14 * np.arange(157)
 _IDX_Y9 = int(np.argmin(np.abs(_ABS_TIME - 3285)))
 
-_EIR_MODEL_CACHE: Dict[str, Any] = {}
-_EMULATOR_MODEL_CACHE: Dict[str, Dict[str, Any]] = {}
+_EMULATOR_MODEL_CACHE: dict[str, dict[str, Any]] = {}
 
 _NET_KEYS = (
     "py_only",
@@ -32,36 +33,11 @@ _NET_KEYS = (
     "py_ppf",
 )
 
-ESTIMINT_MODEL_MAPS: Dict[PredictorType, TargetType] = {
-    "prev_y9": "eir",
-    "hbr_y9": "eir",
-    "eir": "hbr_y9",
-}
-
-INPUT_MODE_TO_PREDICTOR: Dict[Input_Mode, PredictorType] = {
-    "prevalence": "prev_y9",
-    "hbr": "hbr_y9",
-    "eir": "eir",
-}
-
-@dataclass(frozen=True)
-class _EirInputModelConfig:
-    feature_column: str
-    model_name: str
-
 
 # TODO: need to update all docs and type hints etc. readme as well
 ######################## Internal helpers  ########################
 
-def _load_estimint_models(hf_repo: str) -> Dict[str, RQSArtifact]:
-   if hf_repo not in _EIR_MODEL_CACHE:
-       _EIR_MODEL_CACHE[hf_repo] = {
-           repo_id(predictor, target): ConditionalRQS.from_pretrained(hf_repo, predictor, target)
-           for predictor, target in ESTIMINT_MODEL_MAPS.items()
-       }
-   return _EIR_MODEL_CACHE[hf_repo]
-
-def _load_emulators(hf_repo: str) -> Dict[str, Any]:
+def _load_emulators(hf_repo: str) -> dict[str, Any]:
     if hf_repo not in _EMULATOR_MODEL_CACHE:
         try:
             from stateMINT.model import Mamba2Regressor
@@ -69,7 +45,7 @@ def _load_emulators(hf_repo: str) -> Dict[str, Any]:
             raise ImportError(
                 "run_scenarios needs stateMINT. Install it with: "
                 "uv sync --extra scenarios (or pip install "
-                '"git+https://github.com/mrc-ide/stateMINT.git@mamba2-train").'
+                '"mintstate>=0.3.0")'
             ) from error
         _EMULATOR_MODEL_CACHE[hf_repo] = {
             outcome_name: Mamba2Regressor.from_pretrained(hf_repo, predictor=outcome_name)
@@ -184,22 +160,16 @@ def _record_eir_estimate(
     prepared_scenario.emulator_covariates["eir"] = float(eir_final)
 
 
-# TODO: sort types out and string conversions etc
 def _predict_eir_from_measurements(
-    prepared_scenarios: list[PreparedScenario], *, input_mode: Input_Mode, eir_models: Dict[str, RQSArtifact]
+    prepared_scenarios: list[PreparedScenario], *, input_mode: Input_Mode, eir_models: EirModels
 ) -> None:
     """Predict EIR from baseline prevalence or HBR measurements."""
-    model_artifact = eir_models[INPUT_MODE_TO_REPO_IDS[input_mode]]
-
-    model_input_records = [
-        {
-            **prepared_scenario.eir_model_features,
-            INPUT_MODE_TO_PREDICTOR[input_mode]: prepared_scenario.eir_target.input_value,
-        }
-        for prepared_scenario in prepared_scenarios
-    ]
-
-    eir_predictions = model_artifact.predict(model_input_records)
+    eir_predictions = predict_from_measurements(
+        eir_models,
+        INPUT_MODE_TO_PREDICTOR[input_mode],
+        prepared_scenarios,
+        [prepared_scenario.eir_target.input_value for prepared_scenario in prepared_scenarios],
+    )
 
     for prepared_scenario, eir_prediction in zip(prepared_scenarios, eir_predictions):
         _record_eir_estimate(
@@ -218,7 +188,7 @@ def _classify_prepared_scenario(prepared_scenario: PreparedScenario) -> str:
     return prepared_scenario.eir_target.input_mode  # "prevalence" or "hbr"
 
 
-def _apply_mosquito_delta_batch(prepared_scenarios: list[PreparedScenario], eir_models: Dict[str, RQSArtifact]) -> None:
+def _apply_mosquito_delta_batch(prepared_scenarios: list[PreparedScenario], eir_models: EirModels) -> None:
     """Estimate EIR for a batch of scenarios with prevalence input and a mosquito-density change."""
 
     estimates = estimate_eir_with_mosquito_delta(prepared_scenarios, eir_models=eir_models)
@@ -232,10 +202,10 @@ def _apply_mosquito_delta_batch(prepared_scenarios: list[PreparedScenario], eir_
         )
 
 
-def _estimate_eir(scenarios: list[Scenario], eir_models: Dict[str, RQSArtifact]) -> list[PreparedScenario]:
+def _estimate_eir(scenarios: list[Scenario], eir_models: EirModels) -> list[PreparedScenario]:
     """Estimate EIR for many scenarios, dispatching each to one of three paths:
     - "eir": supplied directly, passed through unchanged
-    - "prevalence" / "hbr": predicted from baseline measurements via XGBoost
+    - "prevalence" / "hbr": predicted from baseline measurements by the matching RQS model
     - "mosquito_delta": prevalence input with a projected mosquito-density change
     """
     if any(scenario.eir_target.input_mode not in {"prevalence", "eir", "hbr"} for scenario in scenarios):
@@ -262,12 +232,9 @@ def _estimate_eir(scenarios: list[Scenario], eir_models: Dict[str, RQSArtifact])
 
 
 ######################### Public API  ########################
-def preload_models(*, statemint_hf_repo: str = STATEMINT_HF_REPO, estimint_hf_repo: str = ESTIMINT_HF_REPO) -> tuple[Dict[str, RQSArtifact], Dict[str, Any]]:
+def preload_models(*, statemint_hf_repo: str = STATEMINT_HF_REPO, estimint_hf_repo: str = ESTIMINT_HF_REPO) -> tuple[EirModels, dict[str, Any]]:
     """Preload the models used by run_scenarios."""
-    eir_models = _load_estimint_models(estimint_hf_repo)
-    emulator_models = _load_emulators(statemint_hf_repo)
-
-    return eir_models, emulator_models
+    return load_eir_models(estimint_hf_repo), _load_emulators(statemint_hf_repo)
 
 
 def run_scenarios(

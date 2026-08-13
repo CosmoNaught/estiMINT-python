@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "estimint"
-version = "1.5.4"
+version = "1.6.4"
 description = "EIR Estimation using Machine learning interventions "
 readme = "README.md"
 license = "MIT"
@@ -56,7 +56,7 @@ download = [
 scenarios = [
     "mintstate>=0.3.0"
 ]
-all = ["estimint[train,viz,download,scenarios]"]
+all = ["estimint[train,viz,download,scenarios,gpu]"]
 
 [dependency-groups]
 dev = [

@@ -10,12 +10,12 @@ from typing import Any
 import numpy as np
 import pytest
 
+from estimint.eir_models import EirModels, load_eir_models
 from estimint.scenarios import (
     PreparedScenario,
     _apply_mosquito_delta_batch,
     _classify_prepared_scenario,
     _estimate_eir,
-    _load_estimint_models,
     _prepare_scenario_inputs,
     run_scenarios,
 )
@@ -32,14 +32,14 @@ def mk(**kwargs: Any) -> Scenario:
     return Scenario(eir_target=EirTarget(input_value, input_mode), **defaults)
 
 
-def _estimate_eir_single(scenario: Scenario, eir_models: dict[str, Any]) -> PreparedScenario:
+def _estimate_eir_single(scenario: Scenario, eir_models: EirModels) -> PreparedScenario:
     """Estimate EIR for a single scenario via the batch estimator."""
     return _estimate_eir([scenario], eir_models)[0]
 
 
 @pytest.fixture(scope="module")
 def est():
-    return _load_estimint_models()
+    return load_eir_models()
 
 
 class TestEstimateEir:
