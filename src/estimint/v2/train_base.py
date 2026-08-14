@@ -52,7 +52,7 @@ def train_rqs(cfg: DictConfig, prepared_data: PreparedData):
         seed=cfg.seed,
         shuffle=False,
         num_workers=cfg.num_workers,
-        drop_remainder=True,
+        drop_remainder=False,
     )
     metrics = compute_metrics(rqs_artifact, test_loader)
     log.info(f"test R2={metrics.r2:.4f}  RMSE={metrics.rmse:.2f}  MAE={metrics.mae:.2f} MSE={metrics.mse:.2f} Bias={metrics.bias:.2f} Median APE={metrics.medape:.2f} Log10 MSE={metrics.log10_mse:.2f}")

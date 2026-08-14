@@ -115,11 +115,11 @@ def _forward(model: nnx.Module, context: jnp.ndarray, quantile: float):
 
 FeatureInput = np.ndarray | dict[str, float] | list[dict[str, float]]
 class RQSArtifact:
-    def __init__(self, model: nnx.Module, feature_scaler: FeatureScaler | StandardScaler, target_scaler: StandardScaler, features: list[str], conformal: dict[float, float] = dict()):
+    def __init__(self, model: nnx.Module, feature_scaler: FeatureScaler | StandardScaler, target_scaler: StandardScaler, features: list[str], conformal: dict[float, float] | None = None):
         self.model = model
         self.feature_scaler = feature_scaler
         self.target_scaler = target_scaler
-        self.conformal = conformal # alpha -> offset Q
+        self.conformal = dict(conformal or {}) # alpha -> offset Q
         self.feature_names = features
 
         if self.feature_scaler.mean_.shape[0] != len(self.feature_names):

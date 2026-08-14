@@ -43,3 +43,9 @@ def test_wider_intervals_need_a_smaller_offset(y):
 def test_smaller_alpha_gives_a_larger_offset(y):
     lower, upper = np.zeros_like(y), np.zeros_like(y)
     assert conformal_offset(lower, upper, y, alpha=0.01) > conformal_offset(lower, upper, y, alpha=0.20)
+
+@pytest.mark.parametrize("alpha", [0.0, 1.0, -0.1, 1.1])
+def test_invalid_alpha_raises(y, alpha):
+    lower, upper = np.zeros_like(y), np.zeros_like(y)
+    with pytest.raises(ValueError):
+        conformal_offset(lower, upper, y, alpha=alpha)

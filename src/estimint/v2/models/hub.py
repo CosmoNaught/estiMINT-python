@@ -72,7 +72,9 @@ def load_model_artifact(
         RQSArtifact wrapping the restored model and fitted scalers.
     """
     if Path(path_or_repo_id).exists():
-        artifact_dir = Path(path_or_repo_id)
+        root = Path(path_or_repo_id)
+        model_dir = root / repo_id(predictor, target)
+        artifact_dir = model_dir if model_dir.is_dir() else root
     else:
         artifact_dir = _download_from_hf(
             path_or_repo_id, repo_id(predictor, target), revision=revision, cache_dir=cache_dir, local_dir=local_dir
