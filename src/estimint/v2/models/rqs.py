@@ -170,9 +170,10 @@ class RQSArtifact:
         return np.maximum(0, lower - Q), upper + Q
 
 # ------------ RQS loss ----------------
-def rqs_loss(model, X, y0, w):
+def rqs_loss(model, X, y0, w) -> tuple[jax.Array, jax.Array]:
+    """"Weighted NLL as (total_loss, normalization) rather than a pre-divided mean."""
     log_prob = model.log_prob(y0, X)
-    return -jnp.sum(w * log_prob) / jnp.sum(w)
+    return -jnp.sum(w * log_prob), jnp.sum(w)
 
 # ------------ RQS utils ----------------
 def _spline_knots(raw_widths: jax.Array, raw_heights: jax.Array, raw_derivatives: jax.Array, bounds: int, n_points: int):

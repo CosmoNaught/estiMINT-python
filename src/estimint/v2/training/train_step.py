@@ -14,6 +14,7 @@ import wandb
 from ..data.dataset import make_loader
 from tqdm import tqdm
 from .checkpoint import save_checkpoint
+from ..common.types import LossFn
 
 
 log = logging.getLogger(__name__)
@@ -56,29 +57,37 @@ def get_total_params(model: nnx.Module) -> int:
     params = nnx.state(model, nnx.Param)
     return sum(np.prod(x.shape) for x in jax.tree_util.tree_leaves(params))
 
+def _weighted_mean(terms: list[tuple[Array, Array]]) -> float:
+    """Combine per-batch (total_losses, normalizations) pairs into the loss over all records."""
+    total_losses, normalizations = (jnp.stack(t) for t in zip(*terms))
+    return float(jnp.sum(total_losses) / jnp.sum(normalizations))
 
-def make_train_step(loss_fn: Callable):
+def make_train_step(loss_fn: LossFn):
     @nnx.jit
     def train_step(model: nnx.Module, optimizer: nnx.Optimizer, x: Array, y: Array, w: Array):
-        loss, grads = nnx.value_and_grad(loss_fn)(model, x, y, w)
+        def compute_total_loss(model: nnx.Module, x: Array, y: Array, w: Array):
+            loss_sum, normalization = loss_fn(model, x, y, w)
+            return loss_sum / normalization, (loss_sum, normalization)
+
+        (_, (loss_sum, normalization)), grads = nnx.value_and_grad(compute_total_loss, has_aux=True)(model, x, y, w)
         optimizer.update(model, grads)
-        return loss
+        return loss_sum, normalization
 
     return train_step
 
-def make_eval_step(loss_fn: Callable):
+def make_eval_step(loss_fn: LossFn):
     @nnx.jit
     def eval_step(model: nnx.Module, x: Array, y: Array, w: Array):
-        loss = loss_fn(model, x, y, w)
-        return loss
+        return loss_fn(model, x, y, w)
 
     return eval_step
+
 
 def train_model(
     model: nnx.Module,
     cfg: DictConfig,
     prepared_data: PreparedData,
-    loss_fn: Callable[[nnx.Module, Array, Array, Array], Array],
+    loss_fn: LossFn,
     name: str,
     use_standardized_y: bool = False,
     ) -> nnx.Module:
@@ -94,7 +103,7 @@ def train_model(
         seed=cfg.seed,
         shuffle=False,
         num_workers=cfg.num_workers,
-        drop_remainder=True,
+        drop_remainder=False,
     )
     total_steps = cfg.num_epochs * len(prepared_data.train_data) // cfg.batch_size
     optimizer = create_optimizer(model, cfg.lr, total_steps, weight_decay=cfg.weight_decay)
@@ -115,13 +124,13 @@ def train_model(
             drop_remainder=True,
         )
         model.train()
-        train_losses: list[jax.Array] = [train_step(model, optimizer, batch["x"], batch[target_key], batch["w"]) for batch in train_loader]
+        train_terms = [train_step(model, optimizer, batch["x"], batch[target_key], batch["w"]) for batch in train_loader]
 
         model.eval()
-        val_losses: list[jax.Array] = [eval_step(model, batch["x"], batch[target_key], batch["w"]) for batch in val_loader]
+        val_terms = [eval_step(model, batch["x"], batch[target_key], batch["w"]) for batch in val_loader]
 
-        avg_train_loss = float(jnp.mean(jnp.stack(train_losses)))
-        avg_val_loss = float(jnp.mean(jnp.stack(val_losses)))
+        avg_train_loss = _weighted_mean(train_terms)
+        avg_val_loss = _weighted_mean(val_terms)
         epoch_pbar.set_postfix(
                 train=f"{avg_train_loss:.6f}",
                 val=f"{avg_val_loss:.6f}",

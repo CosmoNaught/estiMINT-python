@@ -139,21 +139,26 @@ class TestLoss:
     def test_loss_is_finite(self, model, context):
         y0 = jax.random.normal(jax.random.key(3), (context.shape[0],))
         w = jnp.ones_like(y0)
-        assert jnp.isfinite(rqs_loss(model, context, y0, w))
+        total_loss, normalization = rqs_loss(model, context, y0, w)
+        assert jnp.isfinite(total_loss / normalization)
 
     def test_loss_is_gradable(self, model, context):
         y0 = jax.random.normal(jax.random.key(3), (context.shape[0],))
         w = jnp.ones_like(y0)
-        grads = nnx.grad(rqs_loss)(model, context, y0, w)
+        def objective(model, X, y0, w):
+            total_loss, normalization = rqs_loss(model, X, y0, w)
+            return total_loss / normalization
+
+        grads = nnx.grad(objective)(model, context, y0, w)
         leaves = jax.tree_util.tree_leaves(grads)
         assert leaves and all(jnp.all(jnp.isfinite(g)) for g in leaves)
 
     def test_zero_weight_rows_are_ignored(self, model, context):
         y0 = jax.random.normal(jax.random.key(3), (context.shape[0],))
         w = jnp.ones_like(y0).at[8:].set(0.0)
-        masked = rqs_loss(model, context, y0, w)
-        kept = rqs_loss(model, context[:8], y0[:8], jnp.ones(8))
-        assert masked == pytest.approx(float(kept), rel=1e-5)
+        masked_total, masked_normalization = rqs_loss(model, context, y0, w)
+        kept_total, kept_normalization = rqs_loss(model, context[:8], y0[:8], jnp.ones(8))
+        assert masked_total / masked_normalization == pytest.approx(float(kept_total / kept_normalization), rel=1e-5)
 
 
 def make_scaler(mean, scale):

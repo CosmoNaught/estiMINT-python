@@ -1,5 +1,5 @@
-predictor: "prev_y9"
-target: "eir"
+predictor: "eir"
+target: "hbr_y9"
 name: "${predictor}-${target}"
 
 # Data
@@ -10,9 +10,9 @@ target_scaler_file: ${output_dir}/target_scaler.pkl
 # Model - ensure these match the checkpointed model's parameters
 model_name: "RQS"
 width: 256
-depth: 2
-mlp_residual: false
-n_bins: 24
+depth: 4
+mlp_residual: true
+n_bins: 32
 rqs_bounds: 6
 dropout_rate: 0.0
 conformal_file: "${output_dir}/conformal-${timestamp}.json"

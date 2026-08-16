@@ -14,6 +14,7 @@ from estimint.v2.data.preprocess import PreparedData
 from estimint.v2.models.mlp import MLP
 from estimint.v2.training.checkpoint import _resolve_checkpoint_dir
 from estimint.v2.training.train_step import (
+    _weighted_mean,
     create_optimizer,
     get_total_params,
     make_eval_step,
@@ -24,11 +25,21 @@ from estimint.v2.training.train_step import (
 N_FEATURES = 3
 
 
+def some_unweighted_loss(model, X, y0, w):
+    """Unweighted loss that ignores the weights, for testing eval_step."""
+    per_record = -model.log_prob(y0, X)
+    return jnp.sum(per_record), jnp.asarray(per_record.shape[0], dtype=per_record.dtype)
+
 def mse_loss(model, x, y, w):
     """Weighted MSE against a scalar target — stands in for rqs_loss."""
     preds = model(x)[:, 0]
-    return jnp.sum(w * (preds - y) ** 2) / jnp.sum(w)
+    return jnp.sum(w * (preds - y) ** 2), jnp.sum(w)
 
+
+def scalar(terms):
+    """Collapse a (total, mass) pair to the batch loss."""
+    total, mass = terms
+    return float(total / mass)
 
 def make_model(seed=0, width=8, depth=1):
     return MLP(N_FEATURES, 1, width=width, depth=depth, dropout_rate=0.0, rngs=nnx.Rngs(seed))
@@ -68,7 +79,7 @@ class TestGetTotalParams:
 class TestCreateOptimizer:
     def apply_updates(self, model, optimizer, batch, n):
         for _ in range(n):
-            _, grads = nnx.value_and_grad(mse_loss)(model, *batch)
+            _, grads = nnx.value_and_grad(mse_loss, has_aux=True)(model, *batch)
             optimizer.update(model, grads)
 
     def test_first_step_is_a_no_op_because_warmup_starts_at_zero(self, batch):
@@ -97,9 +108,9 @@ class TestTrainStep:
         optimizer = create_optimizer(model, learning_rate=1e-2, total_steps=100)
         train_step = make_train_step(mse_loss)
 
-        first = float(train_step(model, optimizer, *batch))
+        first = scalar(train_step(model, optimizer, *batch))
         for _ in range(50):
-            last = float(train_step(model, optimizer, *batch))
+            last = scalar(train_step(model, optimizer, *batch))
         assert last < first
 
     def test_train_step_returns_the_pre_update_loss(self, batch):
@@ -107,8 +118,8 @@ class TestTrainStep:
         optimizer = create_optimizer(model, learning_rate=1e-2, total_steps=100)
         eval_step = make_eval_step(mse_loss)
 
-        expected = float(eval_step(model, *batch))
-        assert float(make_train_step(mse_loss)(model, optimizer, *batch)) == pytest.approx(expected, rel=1e-5)
+        expected = scalar(eval_step(model, *batch))
+        assert scalar(make_train_step(mse_loss)(model, optimizer, *batch)) == pytest.approx(expected, rel=1e-5)
 
     def test_eval_step_leaves_the_model_unchanged(self, batch):
         model = make_model()
@@ -116,6 +127,26 @@ class TestTrainStep:
         make_eval_step(mse_loss)(model, *batch)
         for a, b in zip(before, weights(model)):
             np.testing.assert_array_equal(a, b)
+
+    def test_aggregation_is_invariant_to_batch_partition(self):
+        """The whole point of (total, mass): unequal batches combine exactly."""
+        model = make_model()
+        eval_step = make_eval_step(mse_loss)
+        records = make_records(10)
+        x = jnp.stack([r["x"] for r in records])
+        y = jnp.array([r["y_std"] for r in records])
+        w = jnp.arange(1.0, 11.0)  # deliberately non-uniform
+
+        whole = scalar(eval_step(model, x, y, w))
+        split = _weighted_mean(
+            [eval_step(model, x[:7], y[:7], w[:7]), eval_step(model, x[7:], y[7:], w[7:])],
+        )
+        assert split == pytest.approx(whole, rel=1e-5)
+
+
+    def test_validation_smaller_than_one_batch_still_trains(self, cfg, prepared_data):
+        cfg.batch_size = 64  # larger than the 32-record val split
+        train_model(make_model(), cfg, prepared_data, mse_loss, name="RQS")
 
 
 @pytest.fixture
@@ -158,10 +189,10 @@ class TestTrainModel:
             jnp.array([r["y_std"] for r in prepared_data.val_data]),
             jnp.ones(len(prepared_data.val_data)),
         )
-        before = float(eval_step(model, *val))
+        before = scalar(eval_step(model, *val))
 
         trained = train_model(model, cfg, prepared_data, mse_loss, name="RQS", use_standardized_y=True)
-        assert float(eval_step(trained, *val)) < before
+        assert scalar(eval_step(trained, *val)) < before
 
     def test_training_writes_a_checkpoint(self, cfg, prepared_data):
         train_model(make_model(), cfg, prepared_data, mse_loss, name="RQS")
@@ -174,7 +205,7 @@ class TestTrainModel:
     def test_early_stopping_ends_training_when_validation_stalls(self, cfg, prepared_data, caplog):
         cfg.num_epochs = 50
         cfg.patience = 2
-        constant_loss = lambda model, x, y, w: jnp.sum(jnp.zeros_like(y)) + 1.0
+        constant_loss = lambda model, x, y, w: (jnp.sum(jnp.zeros_like(y)) + 1.0, jnp.asarray(1.0))
 
         with caplog.at_level("INFO"):
             train_model(make_model(), cfg, prepared_data, constant_loss, name="RQS")
@@ -185,7 +216,7 @@ class TestTrainModel:
         cfg.num_epochs = 4
         cfg.min_epochs = 4  # never eligible to stop or checkpoint a best model
         cfg.patience = 1
-        constant_loss = lambda model, x, y, w: jnp.sum(jnp.zeros_like(y)) + 1.0
+        constant_loss = lambda model, x, y, w: (jnp.sum(jnp.zeros_like(y)) + 1.0, jnp.asarray(1.0))
 
         with caplog.at_level("INFO"):
             train_model(make_model(), cfg, prepared_data, constant_loss, name="RQS")
