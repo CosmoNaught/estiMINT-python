@@ -32,6 +32,18 @@ class ConditionalRQS(nnx.Module):
         z, log_det = _rqs(y0, widths, heights, derivatives, self.bounds, inverse=False)
         return jax.scipy.stats.norm.logpdf(z) + log_det
 
+    def cdf(self, y0, context):
+        """standardized target y0 -> P(Y <= y0 | context) = Phi(T(y0)).
+
+        This is the probability integral transform (PIT) of the observation. It is the
+        exact, infinite-sample limit of the simulation-based-calibration rank statistic,
+        available in closed form because T is monotone and the base density is standard
+        normal.
+        """
+        widths, heights, derivatives = self._params(context)
+        z, _ = _rqs(y0, widths, heights, derivatives, self.bounds, inverse=False)
+        return jax.scipy.stats.norm.cdf(z)
+
     def quantile(self, context, quantile):
         """Flow base z -> target y.The q-quantile of y is flow T^{-1}(Phi^{-1}(q))"""
         widths, heights, derivatives = self._params(context)
@@ -110,8 +122,12 @@ class ConditionalRQS(nnx.Module):
         )
 
 @nnx.jit
-def _forward(model: nnx.Module, context: jnp.ndarray, quantile: float):
+def _forward(model: nnx.Module, context: jnp.ndarray, quantile):
     return model.quantile(context, quantile) # type: ignore
+
+@nnx.jit
+def _forward_cdf(model: nnx.Module, y0: jnp.ndarray, context: jnp.ndarray):
+    return model.cdf(y0, context) # type: ignore
 
 FeatureInput = np.ndarray | dict[str, float] | list[dict[str, float]]
 class RQSArtifact:
@@ -150,17 +166,30 @@ class RQSArtifact:
         return X
 
 
-    def _quantile(self, X_raw: FeatureInput, quantile: float) -> np.ndarray:
-        X = self._prepare_inputs(X_raw)
-        context = jnp.array(self.feature_scaler.transform(X))
-        y0 = _forward(self.model, context, quantile)
+    def _context(self, X_raw: FeatureInput) -> jnp.ndarray:
+        return jnp.array(self.feature_scaler.transform(self._prepare_inputs(X_raw)))
+
+    def _quantile(self, X_raw: FeatureInput, quantile: float | np.ndarray) -> np.ndarray:
+        y0 = _forward(self.model, self._context(X_raw), quantile)
         return np.maximum(0, np.power(10, self.target_scaler.inverse_transform(y0)))
 
     def predict(self, X_raw: FeatureInput) -> np.ndarray:
         return self._quantile(X_raw, 0.5) # median prediction
 
-    def quantile(self, X_raw: FeatureInput, quantile: float) -> np.ndarray:
+    def quantile(self, X_raw: FeatureInput, quantile: float | np.ndarray) -> np.ndarray:
+        """Predictive quantile(s). ``quantile`` may be a scalar or one level per row."""
         return self._quantile(X_raw, quantile)
+
+    def cdf(self, X_raw: FeatureInput, y_raw: np.ndarray) -> np.ndarray:
+        """PIT values P(Y <= y_raw | X_raw), one per row. Uniform(0, 1) iff calibrated."""
+        y = np.asarray(y_raw, dtype=np.float32).reshape(-1, 1)
+        y0 = jnp.array(self.target_scaler.transform(np.log10(y))[:, 0])
+        return np.asarray(_forward_cdf(self.model, y0, self._context(X_raw)))
+
+    def sample(self, X_raw: FeatureInput, rng: np.random.Generator) -> np.ndarray:
+        """One draw from the predictive distribution per row, by inverse-CDF sampling."""
+        n = self._prepare_inputs(X_raw).shape[0]
+        return self._quantile(X_raw, rng.uniform(size=n).astype(np.float32))
 
     def interval(self, X_raw: FeatureInput, alpha: float = 0.10) -> tuple[np.ndarray, np.ndarray]:
         """Conformal (1-alpha) band with guaranteed coverage on calibration set. Returns (lower, upper) bounds."""

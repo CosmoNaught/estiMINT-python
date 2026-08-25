@@ -128,6 +128,24 @@ class TestConditionalRQS:
         # net emits K widths + K heights + (K + 1) derivatives
         assert model.net(jnp.zeros((2, N_CONTEXT))).shape == (2, 3 * N_BINS + 1)
 
+    def test_from_pretrained_delegates_to_hub_loader(self, monkeypatch):
+        expected_artifact = object()
+        calls = []
+
+        def load_model_artifact(*args, **kwargs):
+            calls.append((args, kwargs))
+            return expected_artifact
+
+        monkeypatch.setattr("estimint.v2.models.hub.load_model_artifact", load_model_artifact)
+        artifact = ConditionalRQS.from_pretrained(
+            "org/model", "prev_y9", "eir", revision="v0.1.0", cache_dir="cache", local_dir="models"
+        )
+
+        assert artifact is expected_artifact
+        assert calls == [
+            (("org/model", "prev_y9", "eir"), {"revision": "v0.1.0", "cache_dir": "cache", "local_dir": "models"})
+        ]
+
     def test_residual_variant_runs(self, context):
         model = ConditionalRQS(
             N_CONTEXT, width=16, depth=2, n_bins=N_BINS, bounds=BOUNDS, residual=True, rngs=nnx.Rngs(0)
@@ -237,6 +255,24 @@ class TestRQSArtifact:
         X = np.zeros((3, len(features)), dtype=np.float32)
         low, mid, high = (artifact.quantile(X, q) for q in (0.1, 0.5, 0.9))
         assert np.all(low <= mid) and np.all(mid <= high)
+
+    def test_quantile_accepts_one_probability_per_row(self, artifact, features):
+        X = np.zeros((3, len(features)), dtype=np.float32)
+        probabilities = np.array([0.1, 0.5, 0.9], dtype=np.float32)
+        expected = np.array([artifact.quantile(X[i], float(q))[0] for i, q in enumerate(probabilities)])
+        np.testing.assert_allclose(artifact.quantile(X, probabilities), expected)
+
+    def test_cdf_inverts_quantile(self, artifact, features):
+        X = np.zeros((3, len(features)), dtype=np.float32)
+        q = 0.75
+        np.testing.assert_allclose(artifact.cdf(X, artifact.quantile(X, q)), q, atol=1e-5)
+
+    def test_sample_uses_rng_uniform_quantiles(self, artifact, features):
+        X = np.zeros((3, len(features)), dtype=np.float32)
+        seed = 42
+        expected = artifact.quantile(X, np.random.default_rng(seed).uniform(size=3).astype(np.float32))
+        samples = artifact.sample(X, np.random.default_rng(seed))
+        np.testing.assert_allclose(samples, expected)
 
     def test_interval_brackets_the_prediction(self, artifact, features):
         X = np.zeros((3, len(features)), dtype=np.float32)

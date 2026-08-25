@@ -65,3 +65,4 @@ datasets/
 # Miscellaneous
 *.log
 slurm.sh
+posterior_outputs/
