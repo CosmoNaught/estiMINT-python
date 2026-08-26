@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 from dataclasses import dataclass
 
 Input_Mode = Literal["prevalence", "eir", "hbr"]
@@ -29,3 +29,13 @@ class Scenario:
     irs_future: float = 0.0
     routine: float = 0.0
     lsm: float = 0.0
+
+@dataclass
+class PreparedScenario:
+    """A ``Scenario`` resolved into the inputs each downstream model needs."""
+
+    eir_target: EirTarget
+    mosquito_density_change: float
+    eir_model_features: dict[str, float]
+    summary_values: dict[str, Any]
+    emulator_covariates: dict[str, float]

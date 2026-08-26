@@ -1,0 +1,44 @@
+program: estimint/v2/train_base.py
+project: estimint-sweep
+name: estimint-sweep
+method: bayes
+metric:
+  goal: minimize
+  name: val/loss
+
+parameters:
+  lr:
+    distribution: log_uniform_values
+    min: 1e-4
+    max: 1e-2
+  batch_size:
+    values: [256]
+  dropout_rate:
+    values: [0.0, 0.05, 0.1]
+
+  # model-specific
+  width:
+    values: [256, 512]
+  depth:
+    values: [2, 3, 4]
+  n_bins:
+    values: [24, 32]
+  rqs_bounds:
+    values: [6, 8]
+  mlp_residual:
+    values: [true, false]
+
+
+command:
+  - ${env}
+  - python
+  - -m
+  - estimint.v2.train_base
+  - "hydra.output_subdir=null"
+  - "hydra.run.dir=."
+  - ${args_no_hyphens}
+  - use_wandb=true
+  - num_epochs=120
+  - min_epochs=120
+  - predictor=eir
+  - target=hbr_y9

@@ -1,0 +1,40 @@
+predictor: "prev_y9"
+target: "eir"
+name: "${predictor}-${target}"
+
+# data
+data_file: "datasets/estimint_simulations_y9.parquet"
+split_file: "datasets/split_${name}.csv"
+num_workers: 0
+use_existing_split: false
+stratify: false
+calib_frac: 0.06
+
+# model
+width: 256
+depth: 2
+mlp_residual: false
+dropout_rate: 0.0
+n_bins: 24
+rqs_bounds: 6
+conformal_file: "${output_dir}/conformal-${cur_time}.json"
+
+# Hyperparameters
+num_epochs: 120
+min_epochs: 100
+patience: 30
+lr: 1e-3
+batch_size: 256
+weight_decay: 1e-4
+
+# Checkpoint
+checkpoint_dir: "${output_dir}/ckpts-${cur_time}"
+
+# General
+cur_time: ${now:%Y-%m-%dT%H:%M:%S}
+seed: 42
+use_wandb: false
+output_dir: "train_outputs/${name}"
+wandb:
+  project: "estimint-training-${name}"
+  name: "train-${cur_time}"

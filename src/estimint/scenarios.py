@@ -1,26 +1,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from .bednet import DN0Result, calculate_dn0
+from .eir_models import (
+    ESTIMINT_HF_REPO,
+    INPUT_MODE_TO_PREDICTOR,
+    EirModels,
+    load_eir_models,
+    predict_from_measurements,
+)
 from .hbr import estimate_eir_with_mosquito_delta
-from .run import run_xgb_model
-from .storage import load_xgb_model
-from .types import EirTarget, Scenario
+from .types import Input_Mode, PreparedScenario, Scenario
 from collections import defaultdict
 
 ####################### Constants and global storage ###################
-HF_REPO = "dide-ic/stateMINT"
+STATEMINT_HF_REPO = "dide-ic/stateMINT"
 # 157 windows of 14 days from day 2190; intervention at day 3285.
 _ABS_TIME = 2190 + 14 * np.arange(157)
 _IDX_Y9 = int(np.argmin(np.abs(_ABS_TIME - 3285)))
 
-_EIR_MODEL_CACHE: Dict[str, Any] = {}
-_EMULATOR_MODEL_CACHE: Dict[str, Dict[str, Any]] = {}
+_EMULATOR_MODEL_CACHE: dict[str, dict[str, Any]] = {}
 
 _NET_KEYS = (
     "py_only",
@@ -29,30 +33,10 @@ _NET_KEYS = (
     "py_ppf",
 )
 
-_REQUIRED_EIR_MODEL_NAMES = ("prevalence", "hbr", "eir_to_hbr")
-
-
-@dataclass(frozen=True)
-class _EirInputModelConfig:
-    feature_column: str
-    model_name: str
-
-
-_EIR_INPUT_MODEL_CONFIG = {
-    "prevalence": _EirInputModelConfig(feature_column="prev_y9", model_name="prevalence"),
-    "hbr": _EirInputModelConfig(feature_column="hbr_y9", model_name="hbr"),
-}
-
 
 ######################## Internal helpers  ########################
-def _load_eir_hbr_models() -> Dict[str, Any]:
-    if not _EIR_MODEL_CACHE:
-        for model_name in _REQUIRED_EIR_MODEL_NAMES:
-            _EIR_MODEL_CACHE[model_name] = load_xgb_model(model_name)
-    return _EIR_MODEL_CACHE
 
-
-def _load_emulators(hf_repo: str) -> Dict[str, Any]:
+def _load_emulators(hf_repo: str) -> dict[str, Any]:
     if hf_repo not in _EMULATOR_MODEL_CACHE:
         try:
             from stateMINT.model import Mamba2Regressor
@@ -60,7 +44,7 @@ def _load_emulators(hf_repo: str) -> Dict[str, Any]:
             raise ImportError(
                 "run_scenarios needs stateMINT. Install it with: "
                 "uv sync --extra scenarios (or pip install "
-                '"git+https://github.com/mrc-ide/stateMINT.git@mamba2-train").'
+                '"mintstate>=0.3.0")'
             ) from error
         _EMULATOR_MODEL_CACHE[hf_repo] = {
             outcome_name: Mamba2Regressor.from_pretrained(hf_repo, predictor=outcome_name)
@@ -94,17 +78,7 @@ def _calculate_bednet_effects(scenario: Scenario) -> _BedNetEffects:
         future=future_effect,
     )
 
-
-@dataclass
-class _PreparedScenario:
-    eir_target: EirTarget
-    mosquito_density_change: float
-    eir_model_features: Dict[str, float]
-    summary_values: dict[str, Any]
-    emulator_covariates: dict[str, float]
-
-
-def _prepare_scenario_inputs(scenario: Scenario) -> _PreparedScenario:
+def _prepare_scenario_inputs(scenario: Scenario) -> PreparedScenario:
     """Compute the model inputs and initial output values for one scenario."""
     bednet_effects = _calculate_bednet_effects(scenario)
     current_dn0 = bednet_effects.current.dn0
@@ -161,7 +135,7 @@ def _prepare_scenario_inputs(scenario: Scenario) -> _PreparedScenario:
         "hbr_new": np.nan,
     }
 
-    return _PreparedScenario(
+    return PreparedScenario(
         eir_target=scenario.eir_target,
         mosquito_density_change=scenario.mosquito_delta,
         eir_model_features=eir_model_features,
@@ -171,7 +145,7 @@ def _prepare_scenario_inputs(scenario: Scenario) -> _PreparedScenario:
 
 
 def _record_eir_estimate(
-    prepared_scenario: _PreparedScenario,
+    prepared_scenario: PreparedScenario,
     *,
     eir_baseline: float,
     eir_final: float,
@@ -186,19 +160,15 @@ def _record_eir_estimate(
 
 
 def _predict_eir_from_measurements(
-    prepared_scenarios: list[_PreparedScenario], *, input_mode: str, eir_models: Dict[str, Any]
+    prepared_scenarios: list[PreparedScenario], *, input_mode: Input_Mode, eir_models: EirModels
 ) -> None:
     """Predict EIR from baseline prevalence or HBR measurements."""
-    model_config = _EIR_INPUT_MODEL_CONFIG[input_mode]
-    model_input_records = [
-        {
-            **prepared_scenario.eir_model_features,
-            model_config.feature_column: prepared_scenario.eir_target.input_value,
-        }
-        for prepared_scenario in prepared_scenarios
-    ]
-
-    eir_predictions = run_xgb_model(pd.DataFrame(model_input_records), eir_models[model_config.model_name])
+    eir_predictions = predict_from_measurements(
+        eir_models,
+        INPUT_MODE_TO_PREDICTOR[input_mode],
+        prepared_scenarios,
+        [prepared_scenario.eir_target.input_value for prepared_scenario in prepared_scenarios],
+    )
 
     for prepared_scenario, eir_prediction in zip(prepared_scenarios, eir_predictions):
         _record_eir_estimate(
@@ -208,7 +178,7 @@ def _predict_eir_from_measurements(
         )
 
 
-def _classify_prepared_scenario(prepared_scenario: _PreparedScenario) -> str:
+def _classify_prepared_scenario(prepared_scenario: PreparedScenario) -> str:
     """Return the EIR estimation method for a prepared scenario."""
     if prepared_scenario.eir_target.input_mode == "eir":
         return "eir"
@@ -217,18 +187,10 @@ def _classify_prepared_scenario(prepared_scenario: _PreparedScenario) -> str:
     return prepared_scenario.eir_target.input_mode  # "prevalence" or "hbr"
 
 
-def _apply_mosquito_delta_batch(prepared_scenarios: list[_PreparedScenario], eir_models: Dict[str, Any]) -> None:
-    inputs = pd.DataFrame(
-        [
-            {
-                "prevalence": prepared_scenario.eir_target.input_value,
-                "mosquito_delta": prepared_scenario.mosquito_density_change,
-                **prepared_scenario.eir_model_features,
-            }
-            for prepared_scenario in prepared_scenarios
-        ]
-    )
-    estimates = estimate_eir_with_mosquito_delta(inputs, models=eir_models).to_dict(orient="records")
+def _apply_mosquito_delta_batch(prepared_scenarios: list[PreparedScenario], eir_models: EirModels) -> None:
+    """Estimate EIR for a batch of scenarios with prevalence input and a mosquito-density change."""
+
+    estimates = estimate_eir_with_mosquito_delta(prepared_scenarios, eir_models=eir_models)
     for prepared_scenario, estimate in zip(prepared_scenarios, estimates):
         _record_eir_estimate(
             prepared_scenario,
@@ -239,10 +201,10 @@ def _apply_mosquito_delta_batch(prepared_scenarios: list[_PreparedScenario], eir
         )
 
 
-def _estimate_eir(scenarios: list[Scenario], eir_models: Dict[str, Any]) -> list[_PreparedScenario]:
+def _estimate_eir(scenarios: list[Scenario], eir_models: EirModels) -> list[PreparedScenario]:
     """Estimate EIR for many scenarios, dispatching each to one of three paths:
     - "eir": supplied directly, passed through unchanged
-    - "prevalence" / "hbr": predicted from baseline measurements via XGBoost
+    - "prevalence" / "hbr": predicted from baseline measurements by the matching RQS model
     - "mosquito_delta": prevalence input with a projected mosquito-density change
     """
     if any(scenario.eir_target.input_mode not in {"prevalence", "eir", "hbr"} for scenario in scenarios):
@@ -250,7 +212,7 @@ def _estimate_eir(scenarios: list[Scenario], eir_models: Dict[str, Any]) -> list
 
     prepared_scenarios = [_prepare_scenario_inputs(scenario) for scenario in scenarios]
 
-    scenario_groups: dict[str, list[_PreparedScenario]] = defaultdict(list)
+    scenario_groups: dict[str, list[PreparedScenario]] = defaultdict(list)
     for prepared_scenario in prepared_scenarios:
         scenario_groups[_classify_prepared_scenario(prepared_scenario)].append(prepared_scenario)
 
@@ -269,18 +231,16 @@ def _estimate_eir(scenarios: list[Scenario], eir_models: Dict[str, Any]) -> list
 
 
 ######################### Public API  ########################
-def preload_models(*, hf_repo: str = HF_REPO) -> tuple[Dict[str, Any], Dict[str, Any]]:
+def preload_models(*, statemint_hf_repo: str = STATEMINT_HF_REPO, estimint_hf_repo: str = ESTIMINT_HF_REPO) -> tuple[EirModels, dict[str, Any]]:
     """Preload the models used by run_scenarios."""
-    eir_models = _load_eir_hbr_models()
-    emulator_models = _load_emulators(hf_repo)
-
-    return eir_models, emulator_models
+    return load_eir_models(estimint_hf_repo), _load_emulators(statemint_hf_repo)
 
 
 def run_scenarios(
     scenarios: list[Scenario],
     *,
-    hf_repo: str = HF_REPO,
+    statemint_hf_repo: str = STATEMINT_HF_REPO,
+    estimint_hf_repo: str = ESTIMINT_HF_REPO
 ) -> pd.DataFrame:
     """Run a list of scenarios through the estiMINT -> stateMINT pipeline.
 
@@ -293,8 +253,10 @@ def run_scenarios(
         scenarios: Scenarios to evaluate. Each ``Scenario`` describes
             intervention coverages (ITN, IRS, LSM, etc.) and an
             ``EirTarget`` specifying the baseline transmission intensity.
-        hf_repo: HuggingFace repo ID from which emulator model weights are
-            downloaded. Defaults to the package-level ``HF_REPO`` constant.
+        statemint_hf_repo: HuggingFace repo ID from which stateMINT emulator model weights are
+            downloaded. Defaults to the package-level ``STATEMINT_HF_REPO`` constant.
+        estimint_hf_repo: HuggingFace repo ID from which estiMINT model weights are
+            downloaded. Defaults to the package-level ``ESTIMINT_HF_REPO`` constant.
 
     Returns:
         A ``pd.DataFrame`` with one row per scenario containing:
@@ -349,7 +311,7 @@ def run_scenarios(
     if not scenarios:
         return pd.DataFrame()
 
-    eir_models, emulator_models = preload_models(hf_repo=hf_repo)
+    eir_models, emulator_models = preload_models(statemint_hf_repo=statemint_hf_repo, estimint_hf_repo=estimint_hf_repo)
 
     scenario_estimates = _estimate_eir(scenarios, eir_models)
     emulator_covariates = [estimate.emulator_covariates for estimate in scenario_estimates]

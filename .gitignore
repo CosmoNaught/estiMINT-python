@@ -40,12 +40,15 @@ uv.lock
 # Training outputs
 output/
 scripts/output/
+*logs/
+wandb/
 
 # Model training artifacts (regenerable; shipped copies live in src/estimint/data/)
 models/**/*.parquet
 models/**/*.pkl
 models/**/*.model
 models/**/plots/
+
 models/**/metrics/
 
 # Test / coverage
@@ -53,3 +56,13 @@ models/**/metrics/
 .coverage.*
 htmlcov/
 .pytest_cache/
+train_outputs/
+outputs/
+*.out
+test.ipynb
+artifacts/
+datasets/
+# Miscellaneous
+*.log
+slurm.sh
+posterior_outputs/
